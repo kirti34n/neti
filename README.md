@@ -71,17 +71,19 @@ Zero dependencies. Python 3.7+ and an LLM. Nothing else needed.
 ### 3. Add to your AI tools
 
 ```bash
-prism setup claude     # Claude Code — /prism and /prism-check slash commands
+prism setup claude     # Claude Code — /prism and /prism-check in autocomplete
 prism setup codex      # Codex CLI
-prism setup cursor     # Cursor (run in your project dir)
+prism setup cursor     # Cursor
 prism setup copilot    # GitHub Copilot
-prism setup windsurf   # Windsurf (run in your project dir)
-prism setup kiro       # Kiro (run in your project dir)
+prism setup windsurf   # Windsurf
+prism setup kiro       # Kiro
 prism setup augment    # Augment Code
 prism setup all        # all of the above
 ```
 
-No server. No daemon. Each setup creates the config files that teach that AI tool to call `prism` as a shell command.
+Each setup asks: **this project only, or all projects?** You choose the scope.
+
+No server. No daemon. Setup creates the config files that teach each AI tool to call `prism`.
 
 > [!NOTE]
 > After `prism setup claude`, **restart Claude Code** to see `/prism` in autocomplete.

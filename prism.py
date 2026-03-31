@@ -1275,61 +1275,91 @@ def _setup_claude_code():
     print(f"\n  Restart Claude Code to activate.")
 
 
-def _setup_codex():
-    """Add Prism to Codex CLI instructions."""
-    codex_dir = Path.home() / '.codex'
-    codex_dir.mkdir(parents=True, exist_ok=True)
-    f = codex_dir / 'instructions.md'
+def _ask_scope():
+    """Ask user to choose global or project scope."""
+    if not sys.stdin.isatty():
+        return 'project'
+    print(f"\n  Where should Prism be available?")
+    print(f"    1. This project only")
+    print(f"    2. All projects (global)")
+    try:
+        choice = input("  Choose (1/2): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        choice = '1'
+    return 'global' if choice == '2' else 'project'
+
+
+# Tool-specific paths: (global_path_fn, project_path_fn)
+_TOOL_PATHS = {
+    'codex': {
+        'global': lambda: Path.home() / '.codex' / 'instructions.md',
+        'project': lambda: Path.cwd() / '.codex' / 'instructions.md',
+    },
+    'cursor': {
+        'global': lambda: Path.home() / '.cursor' / 'rules' / 'prism.mdc',
+        'project': lambda: Path.cwd() / '.cursor' / 'rules' / 'prism.mdc',
+    },
+    'copilot': {
+        'global': lambda: Path.home() / '.github' / 'copilot-instructions.md',
+        'project': lambda: Path.cwd() / '.github' / 'copilot-instructions.md',
+    },
+    'windsurf': {
+        'global': lambda: Path.home() / '.windsurfrules',
+        'project': lambda: Path.cwd() / '.windsurfrules',
+    },
+    'kiro': {
+        'global': lambda: Path.home() / '.kiro' / 'instructions.md',
+        'project': lambda: Path.cwd() / '.kiro' / 'instructions.md',
+    },
+    'augment': {
+        'global': lambda: Path.home() / '.augment' / 'instructions.md',
+        'project': lambda: Path.cwd() / '.augment' / 'instructions.md',
+    },
+}
+
+
+def _setup_tool(name):
+    """Set up Prism for a specific AI tool with user-chosen scope."""
+    scope = _ask_scope()
+    f = _TOOL_PATHS[name][scope]()
+    f.parent.mkdir(parents=True, exist_ok=True)
+
     block = _integration_block()
-    _append_to_file(f, block, 'Codex')
 
-
-def _setup_cursor():
-    """Create Cursor rule for Prism."""
-    rules_dir = Path.cwd() / '.cursor' / 'rules'
-    rules_dir.mkdir(parents=True, exist_ok=True)
-    (rules_dir / 'prism.mdc').write_text(
-"""---
+    if name == 'cursor':
+        # Cursor needs frontmatter in .mdc format
+        content = """---
 description: Challenge conclusions and get diverse perspectives using Prism
 globs:
 alwaysApply: false
 ---
-""" + _integration_block())
-    print(f"  Cursor: created {rules_dir / 'prism.mdc'}")
+""" + block
+        if f.exists() and 'Prism' in f.read_text():
+            print(f"  {name.title()}: Prism already configured in {f}")
+            return
+        f.write_text(content)
+        print(f"  {name.title()}: created {f}  ({scope})")
+    else:
+        _append_to_file(f, block, name.title(), scope)
 
+
+def _setup_codex():
+    _setup_tool('codex')
+
+def _setup_cursor():
+    _setup_tool('cursor')
 
 def _setup_copilot():
-    """Add Prism to GitHub Copilot instructions."""
-    gh_dir = Path.cwd() / '.github'
-    gh_dir.mkdir(parents=True, exist_ok=True)
-    f = gh_dir / 'copilot-instructions.md'
-    block = _integration_block()
-    _append_to_file(f, block, 'Copilot')
-
+    _setup_tool('copilot')
 
 def _setup_windsurf():
-    """Add Prism to Windsurf rules."""
-    f = Path.cwd() / '.windsurfrules'
-    block = _integration_block()
-    _append_to_file(f, block, 'Windsurf')
-
+    _setup_tool('windsurf')
 
 def _setup_kiro():
-    """Add Prism to Kiro instructions."""
-    kiro_dir = Path.cwd() / '.kiro'
-    kiro_dir.mkdir(parents=True, exist_ok=True)
-    f = kiro_dir / 'instructions.md'
-    block = _integration_block()
-    _append_to_file(f, block, 'Kiro')
-
+    _setup_tool('kiro')
 
 def _setup_augment():
-    """Add Prism to Augment Code instructions."""
-    augment_dir = Path.home() / '.augment'
-    augment_dir.mkdir(parents=True, exist_ok=True)
-    f = augment_dir / 'instructions.md'
-    block = _integration_block()
-    _append_to_file(f, block, 'Augment')
+    _setup_tool('augment')
 
 
 def _integration_block():
@@ -1348,7 +1378,7 @@ Then ask if their thinking has changed.
 """
 
 
-def _append_to_file(f, block, name):
+def _append_to_file(f, block, name, scope=''):
     """Append a block to a file if Prism isn't already present."""
     if f.exists():
         existing = f.read_text()
@@ -1358,7 +1388,8 @@ def _append_to_file(f, block, name):
         f.write_text(existing.rstrip() + '\n' + block)
     else:
         f.write_text(block.strip() + '\n')
-    print(f"  {name}: added Prism to {f}")
+    scope_label = f"  ({scope})" if scope else ''
+    print(f"  {name}: added Prism to {f}{scope_label}")
 
 
 # ============================================================
