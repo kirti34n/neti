@@ -207,6 +207,79 @@ Honest answer: **partially.**
 
 ---
 
+## Integration with AI Coding Tools
+
+Prism has no server. Integration is just slash commands and config files that tell your AI tool to run `prism.py` and read the output.
+
+### One-command setup
+
+```bash
+python3 prism.py setup claude    # Claude Code — creates /prism and /prism-check commands
+python3 prism.py setup codex     # Codex CLI — adds to ~/.codex/instructions.md
+python3 prism.py setup cursor    # Cursor — creates .cursor/rules/prism.mdc
+python3 prism.py setup windsurf  # Windsurf — adds to .windsurfrules
+```
+
+### What it does
+
+The setup command creates integration files that teach your AI tool two things:
+
+| Command | What it runs | When to use |
+|---|---|---|
+| `/prism "question"` | `prism.py json "question"` | Get divergent perspectives on a research question |
+| `/prism-check "conclusion"` | `prism.py json --check "conclusion"` | Challenge an AI conclusion before committing |
+
+Both return clean JSON. The AI tool parses it and presents the results inline.
+
+<details>
+<summary><b>Manual integration (if you prefer)</b></summary>
+
+#### Claude Code
+
+Create `~/.claude/commands/prism.md`:
+```markdown
+Run Prism perspectives on this topic.
+Execute: python3 /path/to/prism.py json "$ARGUMENTS"
+Parse JSON. Show each perspective's key insight. Ask if it changes the user's thinking.
+```
+
+Create `~/.claude/commands/prism-check.md`:
+```markdown
+Challenge this conclusion using Prism.
+Execute: python3 /path/to/prism.py json --check "$ARGUMENTS"
+Parse JSON. Summarize each challenge. Assess if the conclusion holds.
+```
+
+#### Codex CLI
+
+Add to `~/.codex/instructions.md`:
+```markdown
+To challenge conclusions: python3 /path/to/prism.py json --check "conclusion"
+To get perspectives: python3 /path/to/prism.py json "question"
+```
+
+#### Cursor / Windsurf
+
+Add to `.cursorrules` or `.windsurfrules`:
+```
+To challenge conclusions: python3 /path/to/prism.py json --check "conclusion"
+To get perspectives: python3 /path/to/prism.py json "question"
+```
+
+#### Any tool that runs shell commands
+
+```bash
+# Perspectives (JSON)
+python3 prism.py json "your question"
+
+# Challenge a conclusion (JSON)
+python3 prism.py json --check "the conclusion to challenge"
+```
+
+</details>
+
+---
+
 ## Configuration
 
 <details>

@@ -12,6 +12,9 @@ Research-backed structural constraints. Zero dependencies.
   prism.py insights                # your thinking patterns over time
   prism.py history                 # recent sessions
   prism.py config [key] [val]      # show or set configuration
+  prism.py setup claude            # integrate with Claude Code, Codex, Cursor, Windsurf
+  prism.py json "question"         # machine-readable output
+  prism.py json --check "concl"    # machine-readable check output
   prism.py reset                   # fresh start
 
 Config:  .prism.json (project) → ~/.config/prism/config.json (global) → auto-detect
@@ -1031,6 +1034,197 @@ def get_perspectives(question, n=None):
     return result
 
 
+def get_check(conclusion):
+    """Challenge a conclusion. Returns structured JSON for integrations."""
+    cfg = _load_config()
+    provider = cfg.get('provider', 'ollama')
+    results = {}
+
+    if provider in ('openai', 'anthropic', 'gemini', 'openrouter', 'custom'):
+        lock = threading.Lock()
+        def _gen(key):
+            s = STRATEGIES[key]
+            resp = _llm_call(s['system'], s.get('prefix', '') + conclusion, cfg)
+            with lock:
+                if resp:
+                    results[key] = resp
+        threads = [threading.Thread(target=_gen, args=(k,), daemon=True)
+                   for k in CHECK_STRATEGIES]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=120)
+    else:
+        for key in CHECK_STRATEGIES:
+            s = STRATEGIES[key]
+            resp = _llm_call(s['system'], s.get('prefix', '') + conclusion, cfg)
+            if resp:
+                results[key] = resp
+
+    output = {'conclusion': conclusion, 'challenges': []}
+    for key in CHECK_STRATEGIES:
+        if key in results:
+            output['challenges'].append({
+                'strategy': key,
+                'name': STRATEGIES[key]['name'],
+                'text': results[key],
+            })
+    return output
+
+
+# ============================================================
+# INTEGRATION SETUP
+# ============================================================
+
+def setup(platform):
+    """Set up integration with AI coding tools."""
+    prism_path = os.path.abspath(__file__)
+
+    if platform in ('claude', 'claude-code'):
+        _setup_claude_code(prism_path)
+    elif platform == 'codex':
+        _setup_codex(prism_path)
+    elif platform == 'cursor':
+        _setup_cursor(prism_path)
+    elif platform == 'windsurf':
+        _setup_windsurf(prism_path)
+    else:
+        print(f"\n  PRISM — Integration Setup")
+        print(f"  {'─' * 40}")
+        print(f"  python3 prism.py setup claude    # Claude Code")
+        print(f"  python3 prism.py setup codex     # Codex CLI")
+        print(f"  python3 prism.py setup cursor    # Cursor")
+        print(f"  python3 prism.py setup windsurf  # Windsurf\n")
+        print(f"  No server needed. Just slash commands and config files.\n")
+
+
+def _setup_claude_code(prism_path):
+    cmd_dir = Path.home() / '.claude' / 'commands'
+    cmd_dir.mkdir(parents=True, exist_ok=True)
+
+    (cmd_dir / 'prism.md').write_text(
+f"""Run Prism to generate divergent perspectives on this topic.
+
+Execute this command and wait for it to complete:
+```
+python3 {prism_path} json "$ARGUMENTS"
+```
+
+Parse the JSON output. For each perspective, show:
+- **Strategy name** and divergence score from default
+- The key insight in 2-3 sentences (not the full text)
+
+Then ask the user: "Do any of these perspectives change how you think about this?"
+""")
+
+    (cmd_dir / 'prism-check.md').write_text(
+f"""Challenge this conclusion using Prism before committing to it.
+
+Execute this command and wait for it to complete:
+```
+python3 {prism_path} json --check "$ARGUMENTS"
+```
+
+Parse the JSON output. For each challenge (Pre-Mortem, Alt Hypothesis, Falsification, Blind Spot):
+- Summarize the key point in 1-2 sentences
+
+Then assess:
+1. Does the original conclusion still hold?
+2. What assumptions should be questioned?
+3. What would change your recommendation?
+""")
+
+    print(f"\n  Claude Code integration installed.")
+    print(f"  Location: {cmd_dir}")
+    print(f"\n  Commands added:")
+    print(f"    /prism Is my hypothesis falsifiable?")
+    print(f"    /prism-check The data shows X causes Y")
+    print(f"\n  These work globally in all Claude Code sessions.\n")
+
+
+def _setup_codex(prism_path):
+    codex_dir = Path.home() / '.codex'
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    instructions_file = codex_dir / 'instructions.md'
+
+    block = f"""
+## Prism Integration
+
+When the user asks you to challenge a conclusion or check your reasoning, run:
+```
+python3 {prism_path} json --check "the conclusion to challenge"
+```
+
+When the user asks for different perspectives on a topic, run:
+```
+python3 {prism_path} json "the topic"
+```
+
+Parse the JSON and present each perspective's key insight concisely.
+"""
+    if instructions_file.exists():
+        existing = instructions_file.read_text()
+        if 'Prism Integration' not in existing:
+            instructions_file.write_text(existing + '\n' + block)
+            print(f"\n  Appended Prism instructions to {instructions_file}\n")
+        else:
+            print(f"\n  Prism already in {instructions_file}\n")
+    else:
+        instructions_file.write_text(block.strip() + '\n')
+        print(f"\n  Created {instructions_file} with Prism instructions\n")
+
+    print(f"  Usage in Codex: ask it to 'check this conclusion' or 'get perspectives on X'\n")
+
+
+def _setup_cursor(prism_path):
+    rules_dir = Path.cwd() / '.cursor' / 'rules'
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    rules_file = rules_dir / 'prism.mdc'
+
+    rules_file.write_text(
+f"""---
+description: Challenge conclusions and get diverse perspectives using Prism
+globs:
+alwaysApply: false
+---
+
+# Prism Integration
+
+When asked to challenge a conclusion or verify reasoning, run:
+```bash
+python3 {prism_path} json --check "the conclusion"
+```
+
+When asked for different perspectives on a research question, run:
+```bash
+python3 {prism_path} json "the question"
+```
+
+Parse the JSON output. Present each perspective concisely (2-3 sentences per perspective).
+For check results, assess whether the original conclusion still holds.
+""")
+    print(f"\n  Cursor rule created: {rules_file}")
+    print(f"  Activate it in Cursor's rules panel when needed.\n")
+
+
+def _setup_windsurf(prism_path):
+    rules_file = Path.cwd() / '.windsurfrules'
+    block = f"""
+## Prism
+
+To challenge a conclusion: python3 {prism_path} json --check "conclusion"
+To get perspectives: python3 {prism_path} json "question"
+Parse JSON output and present concisely.
+"""
+    if rules_file.exists():
+        existing = rules_file.read_text()
+        if 'Prism' not in existing:
+            rules_file.write_text(existing + '\n' + block)
+    else:
+        rules_file.write_text(block.strip() + '\n')
+    print(f"\n  Windsurf rules updated: {rules_file}\n")
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -1067,12 +1261,17 @@ def _main():
         config_cmd(args[2:])
     elif cmd == 'reset':
         reset()
+    elif cmd == 'setup':
+        setup(args[2] if len(args) > 2 else '')
     elif cmd == 'json':
-        q = ' '.join(args[2:]) if len(args) > 2 else None
+        raw = args[2:]
+        is_check = '--check' in raw
+        q = ' '.join(a for a in raw if a != '--check').strip()
         if q:
-            print(json.dumps(get_perspectives(q), indent=2))
+            result = get_check(q) if is_check else get_perspectives(q)
+            print(json.dumps(result, indent=2))
         else:
-            print(json.dumps({'error': 'No question provided'}))
+            print(json.dumps({'error': 'No input provided'}))
     elif cmd in ('--help', '-h', 'help'):
         print(__doc__)
     elif cmd:
