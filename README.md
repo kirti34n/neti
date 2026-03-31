@@ -207,73 +207,74 @@ Honest answer: **partially.**
 
 ---
 
-## Integration with AI Coding Tools
+## Integration with AI Tools
 
-Prism has no server. Integration is just slash commands and config files that tell your AI tool to run `prism.py` and read the output.
+No server. No daemon. Prism becomes a system command, then each tool just calls it.
 
-### One-command setup
+### Setup
 
 ```bash
-python3 prism.py setup claude    # Claude Code — creates /prism and /prism-check commands
-python3 prism.py setup codex     # Codex CLI — adds to ~/.codex/instructions.md
-python3 prism.py setup cursor    # Cursor — creates .cursor/rules/prism.mdc
-python3 prism.py setup windsurf  # Windsurf — adds to .windsurfrules
+# Step 1: Make 'prism' available everywhere
+python3 prism.py setup install
+
+# Step 2: Integrate with your tools (pick any)
+prism setup claude     # Claude Code — /prism and /prism-check slash commands
+prism setup codex      # Codex CLI — adds to instructions
+prism setup cursor     # Cursor — creates rule file (run in project dir)
+prism setup copilot    # GitHub Copilot — adds to instructions
+prism setup windsurf   # Windsurf — adds to rules (run in project dir)
+
+# Or everything at once
+prism setup all        # install + claude + codex + copilot
 ```
 
-### What it does
+> [!NOTE]
+> After `setup claude`, **restart Claude Code** to pick up new slash commands. Or use `! prism check "conclusion"` which works immediately with no restart.
 
-The setup command creates integration files that teach your AI tool two things:
+### How it works in each tool
 
-| Command | What it runs | When to use |
-|---|---|---|
-| `/prism "question"` | `prism.py json "question"` | Get divergent perspectives on a research question |
-| `/prism-check "conclusion"` | `prism.py json --check "conclusion"` | Challenge an AI conclusion before committing |
+**Claude Code:**
+```
+/prism Is my hypothesis falsifiable?
+/prism-check The data shows correlation therefore causation
+```
+Or inline: `! prism check "The AI concluded X"`
 
-Both return clean JSON. The AI tool parses it and presents the results inline.
+**Codex / Copilot / Cursor / Windsurf:**
+Just ask: "challenge this conclusion using prism" or "get prism perspectives on X" — the instructions teach the AI to run the command.
+
+**Any tool with shell access:**
+```bash
+prism json "your question"              # perspectives as JSON
+prism json --check "AI conclusion"      # challenges as JSON
+```
 
 <details>
-<summary><b>Manual integration (if you prefer)</b></summary>
+<summary><b>Manual integration (no setup command needed)</b></summary>
 
-#### Claude Code
+All integrations work the same way: tell your AI tool to run `prism json "question"` or `prism json --check "conclusion"` and parse the JSON output.
 
-Create `~/.claude/commands/prism.md`:
+**Claude Code** — create `~/.claude/commands/prism.md`:
 ```markdown
-Run Prism perspectives on this topic.
-Execute: python3 /path/to/prism.py json "$ARGUMENTS"
-Parse JSON. Show each perspective's key insight. Ask if it changes the user's thinking.
+Run: prism json "$ARGUMENTS"
+Parse JSON. Show each perspective's key insight concisely.
 ```
 
-Create `~/.claude/commands/prism-check.md`:
+**Codex** — add to `~/.codex/instructions.md`:
 ```markdown
-Challenge this conclusion using Prism.
-Execute: python3 /path/to/prism.py json --check "$ARGUMENTS"
-Parse JSON. Summarize each challenge. Assess if the conclusion holds.
+To challenge conclusions: prism json --check "conclusion"
+To get perspectives: prism json "question"
 ```
 
-#### Codex CLI
+**Cursor** — add to `.cursorrules`:
+```
+To challenge conclusions: prism json --check "conclusion"
+To get perspectives: prism json "question"
+```
 
-Add to `~/.codex/instructions.md`:
+**Copilot** — add to `.github/copilot-instructions.md`:
 ```markdown
-To challenge conclusions: python3 /path/to/prism.py json --check "conclusion"
-To get perspectives: python3 /path/to/prism.py json "question"
-```
-
-#### Cursor / Windsurf
-
-Add to `.cursorrules` or `.windsurfrules`:
-```
-To challenge conclusions: python3 /path/to/prism.py json --check "conclusion"
-To get perspectives: python3 /path/to/prism.py json "question"
-```
-
-#### Any tool that runs shell commands
-
-```bash
-# Perspectives (JSON)
-python3 prism.py json "your question"
-
-# Challenge a conclusion (JSON)
-python3 prism.py json --check "the conclusion to challenge"
+To challenge conclusions: prism json --check "conclusion"
 ```
 
 </details>
