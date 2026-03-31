@@ -39,29 +39,14 @@ Prism is the before/after measurement that reveals this.
 
 ## Get Started
 
-### Option A: Install via pipx (recommended)
-
 ```bash
-pipx install prism-think
+git clone https://github.com/kirti34n/prism.git && cd prism
+pipx install .    # installs 'prism' command globally
 ```
-
-That's it. The `prism` command is now available globally in an isolated environment.
 
 > Don't have pipx? `apt install pipx` (Debian/Ubuntu) or `brew install pipx` (macOS).
-
-### Option B: Install from source
-
-```bash
-git clone https://github.com/keerti/prism.git && cd prism
-pipx install .
-```
-
-### Option C: Standalone (no install)
-
-```bash
-git clone https://github.com/keerti/prism.git && cd prism
-python3 prism.py setup install    # symlinks to ~/.local/bin/prism
-```
+> 
+> **Alternative** (no pipx): `python3 prism.py setup install` — symlinks to `~/.local/bin/prism`.
 
 ### Configure your LLM
 
