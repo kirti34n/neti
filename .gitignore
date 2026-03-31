@@ -5,3 +5,7 @@ __pycache__/
 .venv/
 .env
 .prism.json
+dist/
+build/
+*.egg-info/
+*.egg

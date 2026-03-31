@@ -39,11 +39,31 @@ Prism is the before/after measurement that reveals this.
 
 ## Get Started
 
-### 1. Clone and configure
+### Option A: Install via pip (recommended)
 
 ```bash
-git clone https://github.com/kirti34n/prism.git && cd prism
+pip install prism-think
+```
 
+That's it. The `prism` command is now available globally.
+
+### Option B: Install from source
+
+```bash
+git clone https://github.com/keerti/prism.git && cd prism
+pip install .
+```
+
+### Option C: Standalone (no install)
+
+```bash
+git clone https://github.com/keerti/prism.git && cd prism
+python3 prism.py setup install    # symlinks to ~/.local/bin/prism
+```
+
+### Configure your LLM
+
+```bash
 # Set your LLM (pick one):
 export OPENAI_API_KEY=sk-...        # OpenAI
 export ANTHROPIC_API_KEY=sk-...     # Claude
@@ -53,14 +73,11 @@ export ANTHROPIC_API_KEY=sk-...     # Claude
 Zero dependencies. Python 3.7+ and an LLM. Nothing else needed.
 
 > [!TIP]
-> `pip install sentence-transformers` upgrades measurement from lexical (word overlap) to semantic (384D embeddings). Optional — everything works without it.
+> `pip install prism-think[semantic]` upgrades measurement from lexical (word overlap) to semantic (384D embeddings). Optional — everything works without it.
 
-### 2. Install globally and integrate
+### Integrate with AI tools
 
 ```bash
-# Make 'prism' available as a command everywhere
-python3 prism.py setup install
-
 # Integrate with your AI tools (pick any, or all)
 prism setup claude     # Claude Code — adds /prism and /prism-check commands
 prism setup codex      # Codex CLI

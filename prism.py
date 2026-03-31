@@ -5,19 +5,20 @@ Prism — Think different. Not different answers. Different angles.
 One question through multiple lenses. Measures how your thinking shifts.
 Research-backed structural constraints. Zero dependencies.
 
-  prism.py "question"              # explore: position → perspectives → revised position
-  prism.py check "AI conclusion"   # challenge an AI conclusion before committing
-  prism.py quick "question"        # just show perspectives, no measurement
-  prism.py think                   # random prompt → explore
-  prism.py insights                # your thinking patterns over time
-  prism.py history                 # recent sessions
-  prism.py config [key] [val]      # show or set configuration
-  prism.py setup install            # make 'prism' a global command
-  prism.py setup claude            # + Claude Code slash commands
-  prism.py setup all               # install + all integrations
-  prism.py json "question"         # machine-readable output
-  prism.py json --check "concl"    # machine-readable check output
-  prism.py reset                   # fresh start
+  prism "question"              # explore: position → perspectives → revised position
+  prism check "AI conclusion"   # challenge an AI conclusion before committing
+  prism quick "question"        # just show perspectives, no measurement
+  prism think                   # random prompt → explore
+  prism insights                # your thinking patterns over time
+  prism history                 # recent sessions
+  prism config [key] [val]      # show or set configuration
+  prism setup install           # make 'prism' a global command
+  prism setup claude            # + Claude Code slash commands
+  prism setup all               # install + all integrations
+  prism json "question"         # machine-readable output
+  prism json --check "concl"    # machine-readable check output
+  prism reset                   # fresh start
+  prism --version               # show version
 
 Config:  .prism.json (project) → ~/.config/prism/config.json (global) → auto-detect
 """
@@ -28,6 +29,7 @@ from datetime import datetime
 from collections import Counter
 
 VERSION = 2
+__version__ = '2.1.0'
 
 # ============================================================
 # PATHS
@@ -1143,6 +1145,15 @@ def setup(platform):
 
 def _setup_install(prism_path):
     """Make 'prism' available as a system command."""
+    import shutil
+    existing = shutil.which('prism')
+    resolved = os.path.realpath(existing) if existing else ''
+
+    # If already installed via pip/pipx, skip symlink
+    if existing and ('pipx' in resolved or 'site-packages' in resolved):
+        print(f"\n  Already installed via pip/pipx: {existing}")
+        return
+
     bin_dir = Path.home() / '.local' / 'bin'
     bin_dir.mkdir(parents=True, exist_ok=True)
     link = bin_dir / 'prism'
@@ -1173,7 +1184,12 @@ def _setup_claude_code():
     cmd_dir.mkdir(parents=True, exist_ok=True)
 
     (cmd_dir / 'prism.md').write_text(
-"""Generate divergent perspectives on this topic using Prism.
+"""---
+description: Generate divergent perspectives on a question using Prism
+argument-hint: <question or topic>
+---
+
+Generate divergent perspectives on this topic using Prism.
 
 Run this command:
 ```bash
@@ -1184,7 +1200,12 @@ Parse the JSON output. For each perspective show the strategy name, divergence s
 """)
 
     (cmd_dir / 'prism-check.md').write_text(
-"""Challenge this conclusion using Prism before committing to it.
+"""---
+description: Challenge a conclusion before committing to it using Prism
+argument-hint: <conclusion to challenge>
+---
+
+Challenge this conclusion using Prism before committing to it.
 
 Run this command:
 ```bash
@@ -1333,6 +1354,8 @@ def _main():
             print(json.dumps(result, indent=2))
         else:
             print(json.dumps({'error': 'No input provided'}))
+    elif cmd in ('--version', '-V', 'version'):
+        print(f"prism {__version__}")
     elif cmd in ('--help', '-h', 'help'):
         print(__doc__)
     elif cmd:
