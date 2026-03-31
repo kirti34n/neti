@@ -1178,10 +1178,11 @@ def _setup_install(prism_path):
 
 def _setup_claude_code():
     """Register Prism as a Claude Code marketplace plugin."""
-    settings_path = Path.home() / '.claude' / 'settings.json'
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    claude_dir = Path.home() / '.claude'
+    claude_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load existing settings
+    # --- 1. Register in settings.json ---
+    settings_path = claude_dir / 'settings.json'
     settings = {}
     if settings_path.exists():
         try:
@@ -1189,7 +1190,6 @@ def _setup_claude_code():
         except (json.JSONDecodeError, OSError):
             pass
 
-    # Register marketplace
     if 'extraKnownMarketplaces' not in settings:
         settings['extraKnownMarketplaces'] = {}
     settings['extraKnownMarketplaces']['prism-skill'] = {
@@ -1199,22 +1199,77 @@ def _setup_claude_code():
         }
     }
 
-    # Enable plugin
     if 'enabledPlugins' not in settings:
         settings['enabledPlugins'] = {}
     settings['enabledPlugins']['prism@prism-skill'] = True
 
-    # Write back
     settings_path.write_text(json.dumps(settings, indent=2) + '\n')
 
-    # Clean up old command files if they exist
-    cmd_dir = Path.home() / '.claude' / 'commands'
+    # --- 2. Cache the plugin ---
+    prism_root = Path(os.path.realpath(__file__)).parent
+    cache_dir = claude_dir / 'plugins' / 'cache' / 'prism-skill' / 'prism' / __version__
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy essential files to cache
+    import shutil
+    for item in ('.claude-plugin', '.claude'):
+        src = prism_root / item
+        dst = cache_dir / item
+        if src.exists():
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+    for f in ('prism.py', 'pyproject.toml', 'LICENSE', 'README.md', '.gitignore'):
+        src = prism_root / f
+        if src.exists():
+            shutil.copy2(src, cache_dir / f)
+
+    # --- 3. Register in installed_plugins.json ---
+    plugins_dir = claude_dir / 'plugins'
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    installed_path = plugins_dir / 'installed_plugins.json'
+
+    installed = {'version': 2, 'plugins': {}}
+    if installed_path.exists():
+        try:
+            installed = json.loads(installed_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Get git commit SHA if available
+    commit_sha = ''
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['git', '-C', str(prism_root), 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            commit_sha = result.stdout.strip()
+    except Exception:
+        pass
+
+    now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    installed.setdefault('plugins', {})['prism@prism-skill'] = [{
+        'scope': 'user',
+        'installPath': str(cache_dir),
+        'version': __version__,
+        'installedAt': now,
+        'lastUpdated': now,
+        'gitCommitSha': commit_sha,
+    }]
+
+    installed_path.write_text(json.dumps(installed, indent=2) + '\n')
+
+    # --- 4. Clean up old command files ---
+    cmd_dir = claude_dir / 'commands'
     for old in ('prism.md', 'prism-check.md'):
         old_file = cmd_dir / old
         if old_file.exists():
             old_file.unlink()
 
-    print(f"\n  Claude Code plugin registered in {settings_path}")
+    print(f"\n  Claude Code plugin installed:")
+    print(f"    Cache: {cache_dir}")
     print(f"    /prism <question>          — divergent perspectives")
     print(f"    /prism-check <conclusion>  — challenge a conclusion")
     print(f"\n  Restart Claude Code to activate.")

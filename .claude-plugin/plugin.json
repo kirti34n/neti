@@ -6,7 +6,7 @@
     "name": "keerti"
   },
   "skills": [
-    "./skills/prism",
-    "./skills/prism-check"
+    "./.claude/skills/prism",
+    "./.claude/skills/prism-check"
   ]
 }
