@@ -14,6 +14,7 @@ Research-backed structural constraints. Zero dependencies.
   prism config [key] [val]      # show or set configuration
   prism setup install           # make 'prism' a global command
   prism setup claude            # Claude Code (/prism slash command)
+  prism setup gemini            # Gemini CLI
   prism setup all               # all tool integrations
   prism json "question"         # machine-readable output
   prism json --check "concl"    # machine-readable check output
@@ -23,13 +24,39 @@ Research-backed structural constraints. Zero dependencies.
 Config:  .prism.json (project) → ~/.config/prism/config.json (global) → auto-detect
 """
 
+from __future__ import annotations
+
 import json, sys, time, hashlib, random, re, math, os, threading
 from pathlib import Path
 from datetime import datetime
 from collections import Counter
 
 VERSION = 2
-__version__ = '2.1.0'
+__version__ = '2.3.0'
+
+# ============================================================
+# CONSTANTS
+# ============================================================
+
+# Measurement thresholds
+REFRAMING_DISTANCE = 0.3
+RECONCEPTUALIZATION_SHIFT = 0.15
+DIRECTION_THRESHOLD = 0.05
+INDEPENDENCE_SCALING = 0.6
+DESTABILIZATION_CONFIDENCE_DROP = 3
+SHIFT_THRESHOLD = 0.1
+INPUT_TRUNCATION_LIMIT = 500
+
+# Operational limits
+MAX_CONCURRENT_LLM = 8
+MAX_SESSIONS = 500
+OLLAMA_TIMEOUT = 120
+API_TIMEOUT = 60
+GEMINI_TIMEOUT = 90
+
+# Strategy weight bounds
+WEIGHT_MIN = 0.1
+WEIGHT_MAX = 5.0
 
 # ============================================================
 # PATHS
@@ -51,7 +78,7 @@ def _find_project_config():
         if f.exists():
             try:
                 return json.loads(f.read_text())
-            except:
+            except (json.JSONDecodeError, OSError):
                 pass
         parent = d.parent
         if parent == d:
@@ -65,7 +92,7 @@ def _load_global_config():
     if f.exists():
         try:
             return json.loads(f.read_text())
-        except:
+        except (json.JSONDecodeError, OSError):
             pass
     return {}
 
@@ -76,7 +103,7 @@ def _save_global_config(cfg):
 
 
 def _detect_provider():
-    import urllib.request
+    import urllib.request, urllib.error
     try:
         req = urllib.request.Request('http://localhost:11434/api/tags')
         resp = urllib.request.urlopen(req, timeout=3)
@@ -84,7 +111,7 @@ def _detect_provider():
         models = [m['name'] for m in data.get('models', [])]
         if models:
             return {'provider': 'ollama', 'model': models[0]}
-    except:
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
         pass
     if os.environ.get('OPENAI_API_KEY'):
         return {'provider': 'openai', 'model': 'gpt-4o-mini'}
@@ -99,15 +126,19 @@ def _detect_provider():
 
 def _load_config():
     defaults = {
-        'provider': 'ollama', 'model': 'qwen3:8b', 'temperature': 0.7,
-        'max_tokens': 300, 'strategies': 'auto',
+        'provider': 'ollama', 'model': 'qwen3:8b', 'temperature': 0.9,
+        'max_tokens': 500, 'strategies': 'auto',
         'num_perspectives': 4, 'num_shown': 3,
     }
-    detected = _detect_provider()
-    if detected:
-        defaults['provider'] = detected['provider']
-        defaults['model'] = detected['model']
-    return {**defaults, **_load_global_config(), **_find_project_config()}
+    global_cfg = _load_global_config()
+    project_cfg = _find_project_config()
+    # Only auto-detect if no provider explicitly configured (avoids 3s Ollama timeout)
+    if 'provider' not in global_cfg and 'provider' not in project_cfg:
+        detected = _detect_provider()
+        if detected:
+            defaults['provider'] = detected['provider']
+            defaults['model'] = detected['model']
+    return {**defaults, **global_cfg, **project_cfg}
 
 
 # ============================================================
@@ -142,15 +173,15 @@ def _embed(text):
     return _EMB_CACHE[key]
 
 
-def _cosine_distance_emb(a, b):
+def _cosine_distance_emb(a: list[float], b: list[float]) -> float:
     return max(0.0, 1.0 - sum(x * y for x, y in zip(a, b)))
 
 
-def _tokenize(text):
+def _tokenize(text: str) -> list[str]:
     return re.findall(r'\b\w+\b', text.lower())
 
 
-def _bow_distance(a, b):
+def _bow_distance(a: str, b: str) -> float:
     va, vb = Counter(_tokenize(a)), Counter(_tokenize(b))
     inter = set(va) & set(vb)
     if not inter:
@@ -164,7 +195,7 @@ def _bow_distance(a, b):
     return max(0.0, round(d, 10))
 
 
-def _distance(a, b):
+def _distance(a: str, b: str) -> float:
     ea, eb = _embed(a), _embed(b)
     if ea is not None and eb is not None:
         return _cosine_distance_emb(ea, eb)
@@ -175,7 +206,7 @@ def _measurement_method():
     return 'semantic' if _load_embedder() else 'lexical'
 
 
-def _measure_direction(before, after, responses):
+def _measure_direction(before: str | None, after: str | None, responses: dict[str, str]) -> str:
     if not before or not after:
         return 'unknown'
     bd = {k: _distance(before, v) for k, v in responses.items() if v}
@@ -185,31 +216,32 @@ def _measure_direction(before, after, responses):
     bn = min(bd.values())
     ank = min(ad, key=ad.get)
     an = ad[ank]
-    if an < bn - 0.05:
+    if an < bn - DIRECTION_THRESHOLD:
         return f'toward_{ank}'
-    elif an > bn + 0.05:
+    elif an > bn + DIRECTION_THRESHOLD:
         return 'independent'
     return 'stable'
 
 
-def _measure_independence(after, responses):
+def _measure_independence(after: str | None, responses: dict[str, str]) -> float | None:
     if not after:
         return None
     dists = [_distance(after, v) for v in responses.values() if v]
-    return min(1.0, min(dists) / 0.6) if dists else None
+    return min(1.0, min(dists) / INDEPENDENCE_SCALING) if dists else None
 
 
-def _classify_session(conf_before, conf_after, shift, direction, after_text, question):
+def _classify_session(conf_before: int | None, conf_after: int | None, shift: float | None,
+                      direction: str, after_text: str | None, question: str) -> str:
     """Classify session based on confidence + text + direction signals."""
     # Reframing: user asked a different question
     is_reframing = (after_text and '?' in after_text
-                    and _distance(question, after_text) > 0.3)
+                    and _distance(question, after_text) > REFRAMING_DISTANCE)
     if is_reframing:
         return 'reframing'
 
     # Destabilization: confidence dropped significantly
     if conf_before is not None and conf_after is not None:
-        if conf_after - conf_before <= -3:
+        if conf_after - conf_before <= -DESTABILIZATION_CONFIDENCE_DROP:
             return 'destabilization'
 
     # Adoption: moved toward a model response
@@ -217,11 +249,11 @@ def _classify_session(conf_before, conf_after, shift, direction, after_text, que
         return 'adoption'
 
     # Reconceptualization: genuine shift in independent direction
-    if shift is not None and shift > 0.15 and direction == 'independent':
+    if shift is not None and shift > RECONCEPTUALIZATION_SHIFT and direction == 'independent':
         return 'reconceptualization'
 
     # Some shift but not clearly classified
-    if shift is not None and shift > 0.1:
+    if shift is not None and shift > SHIFT_THRESHOLD:
         return 'shift'
 
     return 'unshaken'
@@ -236,7 +268,7 @@ def _read_with_timeout(resp, timeout=60):
     def _read():
         try:
             result[0] = resp.read()
-        except:
+        except OSError:
             result[0] = b''
     t = threading.Thread(target=_read, daemon=True)
     t.start()
@@ -244,107 +276,130 @@ def _read_with_timeout(resp, timeout=60):
     return result[0] if result[0] else b''
 
 
-def _llm_call(system_prompt, user_prompt, config):
-    import urllib.request, urllib.error, socket
+def _verbose(msg):
+    if os.environ.get('PRISM_VERBOSE'):
+        print(f"  [verbose] {msg}", flush=True)
+
+
+def _build_ollama(system_prompt, user_prompt, model, temp, max_tokens, config):
+    url = config.get('endpoint', 'http://localhost:11434') + '/api/chat'
+    predict = max(max_tokens * 3, 1500) if 'qwen' in model.lower() else max_tokens
+    body = json.dumps({
+        'model': model,
+        'messages': [{'role': 'system', 'content': system_prompt},
+                     {'role': 'user', 'content': user_prompt}],
+        'stream': False,
+        'options': {'temperature': temp, 'num_predict': predict}
+    }).encode()
+    headers = {'Content-Type': 'application/json'}
+    return url, body, headers, OLLAMA_TIMEOUT
+
+
+def _parse_ollama(raw):
+    text = json.loads(raw).get('message', {}).get('content', '')
+    return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+
+
+def _build_openai_compat(system_prompt, user_prompt, model, temp, max_tokens, config):
+    provider = config.get('provider', 'openai')
+    if provider == 'openai':
+        url = 'https://api.openai.com/v1/chat/completions'
+        key = os.environ.get('OPENAI_API_KEY', '')
+    elif provider == 'openrouter':
+        url = 'https://openrouter.ai/api/v1/chat/completions'
+        key = os.environ.get('OPENROUTER_API_KEY', '')
+    else:
+        url = config.get('endpoint', 'http://localhost:1234/v1') + '/chat/completions'
+        key = os.environ.get('CUSTOM_API_KEY', '')
+    body = json.dumps({
+        'model': model,
+        'messages': [{'role': 'system', 'content': system_prompt},
+                     {'role': 'user', 'content': user_prompt}],
+        'temperature': temp, 'max_tokens': max_tokens,
+    }).encode()
+    headers = {'Content-Type': 'application/json'}
+    if key:
+        headers['Authorization'] = f'Bearer {key}'
+    return url, body, headers, API_TIMEOUT
+
+
+def _parse_openai_compat(raw):
+    choices = json.loads(raw).get('choices', [])
+    return choices[0].get('message', {}).get('content', '') if choices else ''
+
+
+def _build_anthropic(system_prompt, user_prompt, model, temp, max_tokens, config):
+    key = os.environ.get('ANTHROPIC_API_KEY', '')
+    body = json.dumps({
+        'model': model, 'max_tokens': max_tokens,
+        'system': system_prompt,
+        'messages': [{'role': 'user', 'content': user_prompt}],
+        'temperature': temp,
+    }).encode()
+    headers = {
+        'Content-Type': 'application/json', 'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+    }
+    return 'https://api.anthropic.com/v1/messages', body, headers, API_TIMEOUT
+
+
+def _parse_anthropic(raw):
+    blocks = json.loads(raw).get('content', [])
+    return ' '.join(b.get('text', '') for b in blocks if b.get('type') == 'text')
+
+
+def _build_gemini(system_prompt, user_prompt, model, temp, max_tokens, config):
+    key = os.environ.get('GOOGLE_API_KEY', '')
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    body = json.dumps({
+        'system_instruction': {'parts': [{'text': system_prompt}]},
+        'contents': [{'parts': [{'text': user_prompt}]}],
+        'generationConfig': {'temperature': temp, 'maxOutputTokens': max_tokens}
+    }).encode()
+    headers = {'Content-Type': 'application/json'}
+    return url, body, headers, GEMINI_TIMEOUT
+
+
+def _parse_gemini(raw):
+    parts = json.loads(raw).get('candidates', [{}])[0].get('content', {}).get('parts', [])
+    return parts[0].get('text', '') if parts else ''
+
+
+_PROVIDERS = {
+    'ollama': (_build_ollama, _parse_ollama),
+    'openai': (_build_openai_compat, _parse_openai_compat),
+    'openrouter': (_build_openai_compat, _parse_openai_compat),
+    'custom': (_build_openai_compat, _parse_openai_compat),
+    'anthropic': (_build_anthropic, _parse_anthropic),
+    'gemini': (_build_gemini, _parse_gemini),
+}
+
+
+def _llm_call(system_prompt: str, user_prompt: str, config: dict) -> str:
+    import urllib.request, urllib.error
     provider = config.get('provider', 'ollama')
     model = config.get('model', '')
     temp = config.get('temperature', 0.7)
     max_tokens = config.get('max_tokens', 300)
-    old_timeout = socket.getdefaulttimeout()
+
+    build_fn, parse_fn = _PROVIDERS.get(provider, (_build_ollama, _parse_ollama))
 
     for attempt in range(2):
         try:
-            if provider == 'ollama':
-                socket.setdefaulttimeout(120)
-                url = config.get('endpoint', 'http://localhost:11434') + '/api/chat'
-                predict = max(max_tokens * 3, 1500) if 'qwen' in model.lower() else max_tokens
-                body = json.dumps({
-                    'model': model,
-                    'messages': [{'role': 'system', 'content': system_prompt},
-                                 {'role': 'user', 'content': user_prompt}],
-                    'stream': False,
-                    'options': {'temperature': temp, 'num_predict': predict}
-                }).encode()
-                req = urllib.request.Request(url, data=body,
-                    headers={'Content-Type': 'application/json'})
-                resp = urllib.request.urlopen(req, timeout=120)
-                raw = _read_with_timeout(resp, timeout=120)
-                text = json.loads(raw).get('message', {}).get('content', '')
-                text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
-                socket.setdefaulttimeout(old_timeout)
-                return text
-
-            elif provider in ('openai', 'openrouter', 'custom'):
-                socket.setdefaulttimeout(60)
-                if provider == 'openai':
-                    url = 'https://api.openai.com/v1/chat/completions'
-                    key = os.environ.get('OPENAI_API_KEY', '')
-                elif provider == 'openrouter':
-                    url = 'https://openrouter.ai/api/v1/chat/completions'
-                    key = os.environ.get('OPENROUTER_API_KEY', '')
-                else:
-                    url = config.get('endpoint', 'http://localhost:1234/v1') + '/chat/completions'
-                    key = os.environ.get('CUSTOM_API_KEY', '')
-                body = json.dumps({
-                    'model': model,
-                    'messages': [{'role': 'system', 'content': system_prompt},
-                                 {'role': 'user', 'content': user_prompt}],
-                    'temperature': temp, 'max_tokens': max_tokens,
-                }).encode()
-                headers = {'Content-Type': 'application/json'}
-                if key:
-                    headers['Authorization'] = f'Bearer {key}'
-                req = urllib.request.Request(url, data=body, headers=headers)
-                resp = urllib.request.urlopen(req, timeout=60)
-                raw = _read_with_timeout(resp, timeout=60)
-                choices = json.loads(raw).get('choices', [])
-                socket.setdefaulttimeout(old_timeout)
-                return choices[0].get('message', {}).get('content', '') if choices else ''
-
-            elif provider == 'anthropic':
-                socket.setdefaulttimeout(60)
-                key = os.environ.get('ANTHROPIC_API_KEY', '')
-                body = json.dumps({
-                    'model': model, 'max_tokens': max_tokens,
-                    'system': system_prompt,
-                    'messages': [{'role': 'user', 'content': user_prompt}],
-                    'temperature': temp,
-                }).encode()
-                req = urllib.request.Request('https://api.anthropic.com/v1/messages',
-                    data=body, headers={
-                        'Content-Type': 'application/json', 'x-api-key': key,
-                        'anthropic-version': '2023-06-01',
-                    })
-                resp = urllib.request.urlopen(req, timeout=60)
-                raw = _read_with_timeout(resp, timeout=60)
-                blocks = json.loads(raw).get('content', [])
-                socket.setdefaulttimeout(old_timeout)
-                return ' '.join(b.get('text', '') for b in blocks if b.get('type') == 'text')
-
-            elif provider == 'gemini':
-                socket.setdefaulttimeout(90)
-                key = os.environ.get('GOOGLE_API_KEY', '')
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-                body = json.dumps({
-                    'system_instruction': {'parts': [{'text': system_prompt}]},
-                    'contents': [{'parts': [{'text': user_prompt}]}],
-                    'generationConfig': {'temperature': temp, 'maxOutputTokens': max_tokens}
-                }).encode()
-                req = urllib.request.Request(url, data=body,
-                    headers={'Content-Type': 'application/json'})
-                resp = urllib.request.urlopen(req, timeout=90)
-                raw = _read_with_timeout(resp, timeout=90)
-                parts = json.loads(raw).get('candidates', [{}])[0].get('content', {}).get('parts', [])
-                socket.setdefaulttimeout(old_timeout)
-                return parts[0].get('text', '') if parts else ''
-
-        except Exception:
-            socket.setdefaulttimeout(old_timeout)
+            url, body, headers, timeout = build_fn(
+                system_prompt, user_prompt, model, temp, max_tokens, config)
+            req = urllib.request.Request(url, data=body, headers=headers)
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            raw = _read_with_timeout(resp, timeout=timeout)
+            return parse_fn(raw)
+        except Exception as e:
+            err = f"{provider}/{model}: {type(e).__name__}: {e}"
+            _log(f"LLM error: {err}")
+            _verbose(f"LLM error (attempt {attempt+1}): {err}")
             if attempt == 0:
                 time.sleep(1)
             else:
                 return ''
-    socket.setdefaulttimeout(old_timeout)
     return ''
 
 
@@ -355,65 +410,65 @@ def _llm_call(system_prompt, user_prompt, config):
 STRATEGIES = {
     'default': {
         'name': 'Default',
-        'system': 'Answer the question directly and honestly.',
+        'system': 'Answer the question directly. Give the most practical, well-reasoned answer you can. Include specific technologies, approaches, or steps — not vague principles. If there are trade-offs, name them concretely.',
     },
     # === Evidence-backed general strategies ===
     'devils_advocate': {
         'name': "Devil's Advocate",
-        'system': 'Argue AGAINST the most likely answer. No hedging, no "both sides." Take the opposing position and defend it with your strongest arguments. Be specific and committed.',
+        'system': 'Argue AGAINST the most likely answer. No hedging, no "both sides." Take the opposing position and defend it like you believe it. Name specific real-world examples where the popular approach failed. Attack the weakest assumptions. Make the reader uncomfortable with the conventional wisdom.',
         'prefix': 'The common answer is probably obvious. Argue against it:\n\n',
         'evidence': 'Lord, Lepper & Preston 1984 — "consider the opposite" eliminates anchoring',
     },
     'blind_spot': {
         'name': 'Blind Spot',
-        'system': 'Identify exactly ONE thing most people overlook about this. Not a list. Name the blind spot, explain why people miss it, and what changes when you see it.',
+        'system': 'Identify exactly ONE hidden assumption or overlooked constraint that changes the entire framing. Not a minor detail — a structural blind spot that, once seen, makes the obvious answer look naive. Explain the specific mechanism that keeps people from seeing it. Give a concrete example of what goes wrong when it is missed.',
         'prefix': 'What is the one thing most people miss:\n\n',
     },
     'first_principles': {
         'name': 'First Principles',
-        'system': 'List the 2-3 assumptions everyone takes for granted. Question each one — what if it is wrong? Rebuild the answer from scratch without those assumptions.',
+        'system': 'Strip away every inherited assumption. Name the 2-3 things "everyone knows" that might be wrong. For each, describe the specific scenario where it breaks down, cite a real precedent if possible, and show what answer you get when you rebuild without that assumption. The rebuilt answer should surprise.',
         'prefix': 'Break this down to first principles:\n\n',
         'evidence': 'Koriat 1980 — counterargument generation calibrates confidence',
     },
     'inversion': {
         'name': 'Inversion',
-        'system': 'Answer the exact OPPOSITE question. If it asks how to succeed, explain how to guarantee failure. Be thorough. Let the contrast reveal what the direct answer misses.',
+        'system': 'Answer the exact OPPOSITE question. If they ask how to succeed, write a detailed recipe for guaranteed failure — specific steps, specific mistakes, specific bad decisions. Be thorough and concrete. Then explicitly state what the original answer was hiding that the inversion reveals.',
         'prefix': 'Answer the opposite:\n\n',
         'evidence': 'Mussweiler 2000 — considering the opposite eliminates anchoring in expert judgment',
     },
     'systems': {
         'name': 'Systems',
-        'system': 'Ignore the direct answer. Focus on second-order and third-order effects only. What happens BECAUSE of the obvious answer? Follow the chain at least three steps.',
+        'system': 'Ignore the direct answer. Map the second-order and third-order effects. What breaks, shifts, or emerges BECAUSE of the obvious answer? Follow each causal chain at least three steps with specific examples. Name the feedback loops. Identify where the system will fight back against the intended change.',
         'prefix': 'What are the downstream consequences:\n\n',
     },
     'stakeholder': {
         'name': 'Stakeholder',
-        'system': 'Identify who is most HARMED by the conventional answer or approach. Explain entirely from their perspective. Give voice only to the one who loses.',
+        'system': 'Identify who gets harmed, marginalized, or locked out by the conventional approach. Tell the story entirely from their perspective — their constraints, their frustrations, their alternatives. Name specific scenarios. Make the reader feel the friction the standard answer creates for someone who is not the assumed user.',
         'prefix': 'Who loses when we answer this the standard way:\n\n',
         'evidence': 'Galinsky & Moskowitz 2000 — perspective-taking reduces bias',
     },
     # === Research-specific strategies (evidence-backed) ===
     'pre_mortem': {
         'name': 'Pre-Mortem',
-        'system': 'This research direction has been pursued and FAILED completely. The failure was predictable. Write the post-mortem: what went wrong, what warning signs were ignored, why the approach was flawed from the start. Be specific — name the exact failure mode.',
+        'system': 'It is 18 months from now. This approach was pursued and FAILED. The failure was predictable in hindsight. Write the post-mortem: name the specific failure mode, the early warning signs that were rationalized away, the moment the team should have pivoted but did not. Be brutally concrete — "the API rate limits hit at 10K users and there was no fallback" not "scalability was an issue."',
         'prefix': 'Assume this has already failed:\n\n',
         'evidence': 'Klein 2007 — prospective hindsight generates 30% more failure reasons, reduces overconfidence',
     },
     'alternative_hypothesis': {
         'name': 'Alt Hypothesis',
-        'system': 'Name 3 genuinely different explanations for the same evidence. Not variations — structurally different causal mechanisms. For each, briefly state what data would distinguish it from the original.',
+        'system': 'Name 3 genuinely different explanations or approaches for the same problem. Not variations on a theme — structurally different mechanisms or architectures. For each, state (a) the core insight that makes it work, (b) one specific scenario where it outperforms the obvious answer, and (c) the exact test or metric that would distinguish between them.',
         'prefix': 'What else could explain this:\n\n',
         'evidence': 'Hirt & Markman 1995 — any alternative triggers debiasing simulation mindset',
     },
     'falsification': {
         'name': 'Falsification',
-        'system': 'What specific, concrete, observable result would DISPROVE this? Name the exact experiment or observation that would force abandoning this position. If nothing could disprove it, explain why that is a serious problem.',
+        'system': 'Design the exact test that would DISPROVE this approach. Name the specific metric, threshold, and scenario. "If X does not achieve Y under condition Z within timeframe W, this approach is wrong." If no test can disprove it, that itself is a red flag — explain exactly why unfalsifiable plans are dangerous and what would make this one testable.',
         'prefix': 'What would disprove this:\n\n',
         'evidence': 'Tetlock 2015 — superforecasters are 60% more accurate; falsification thinking is their key habit',
     },
     'adjacent_field': {
         'name': 'Adjacent Field',
-        'system': 'Choose a completely different academic field. Describe how a researcher from that field would frame this same problem — different vocabulary, different mechanisms, different methods. Name the field and explain the reframing concretely.',
+        'system': 'Pick a specific field that has already solved an analogous problem. Name the field, the specific technique or framework, and how it maps onto this problem in concrete terms. Use their vocabulary. Describe what a practitioner from that field would do differently in the first week of this project. The reframing should produce at least one specific, actionable idea the original framing would never generate.',
         'prefix': 'How would a different field see this:\n\n',
         'evidence': 'Uzzi 2013 (Science, 17.9M papers) — atypical combinations produce 2x citation impact',
     },
@@ -447,34 +502,32 @@ def _generate_perspectives(question, strategies, config, quiet=False):
     results = {}
     _p = (lambda *a, **kw: None) if quiet else (lambda *a, **kw: print(*a, **kw))
 
-    _p(f"  [1/{len(strategies)+1}] Default", end="", flush=True)
     default_resp = _llm_call(STRATEGIES['default']['system'], question,
         {**config, 'max_tokens': config.get('max_tokens', 300) + 100})
     results['default'] = default_resp
-    _p(f" — done" if default_resp else " — failed")
+    _p(f"\r  Generating... [1/{len(strategies)+1}]", end="", flush=True)
 
-    if provider in ('openai', 'anthropic', 'gemini', 'openrouter', 'custom'):
-        lock = threading.Lock()
-        def _gen(idx, key):
+    lock = threading.Lock()
+    sem = threading.Semaphore(MAX_CONCURRENT_LLM)
+    completed = [0]
+    total = len(strategies) + 1
+    def _gen(idx, key):
+        with sem:
             s = STRATEGIES[key]
             resp = _llm_call(s['system'], s.get('prefix', '') + question, config)
             with lock:
                 results[key] = resp
-            _p(f"  [{idx+2}/{len(strategies)+1}] {s['name']} — {'done' if resp else 'failed'}")
-        threads = []
-        for i, key in enumerate(strategies):
-            t = threading.Thread(target=_gen, args=(i, key), daemon=True)
-            threads.append(t)
-            t.start()
-        for t in threads:
-            t.join(timeout=120)
-    else:
-        for i, key in enumerate(strategies):
-            s = STRATEGIES[key]
-            _p(f"  [{i+2}/{len(strategies)+1}] {s['name']}", end="", flush=True)
-            resp = _llm_call(s['system'], s.get('prefix', '') + question, config)
-            results[key] = resp
-            _p(f" — {'done' if resp else 'failed'}")
+                completed[0] += 1
+                _p(f"\r  Generating... [{completed[0]}/{total}]", end="", flush=True)
+    threads = []
+    for i, key in enumerate(strategies):
+        t = threading.Thread(target=_gen, args=(i, key), daemon=True)
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join(timeout=120)
+    if not quiet:
+        print()
 
     return results
 
@@ -506,7 +559,7 @@ def _migrate_legacy_state():
                     new['strategy_weights'][k] = w
             _save_state(new)
             return new
-        except:
+        except (json.JSONDecodeError, OSError, KeyError, TypeError):
             pass
     return None
 
@@ -518,7 +571,7 @@ def _load_state():
             data = json.loads(STATE_FILE.read_text())
             if data.get('version') == VERSION:
                 return data
-        except:
+        except (json.JSONDecodeError, OSError, KeyError, TypeError):
             pass
     migrated = _migrate_legacy_state()
     return migrated if migrated else _new_state()
@@ -527,7 +580,12 @@ def _load_state():
 def _save_state(state):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     state['last_used'] = datetime.now().isoformat()
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    sessions = state.get('sessions', [])
+    if len(sessions) > MAX_SESSIONS:
+        state['sessions'] = sessions[-MAX_SESSIONS:]
+    tmp = STATE_FILE.with_suffix('.tmp')
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.replace(STATE_FILE)
 
 
 def _log(msg):
@@ -540,7 +598,8 @@ def _log(msg):
 # FEEDBACK
 # ============================================================
 
-def _update_weights(state, shown, rated, session_type, direction):
+def _update_weights(state: dict, shown: list[str], rated: str | None,
+                    session_type: str, direction: str) -> None:
     w = state.get('strategy_weights', {})
     for key in shown:
         w[key] = w.get(key, 1.0) * 1.02
@@ -562,8 +621,12 @@ def _update_weights(state, shown, rated, session_type, direction):
         target = direction.replace('toward_', '')
         if target in w:
             w[target] = w.get(target, 1.0) * 1.05
-    for key in w:
-        w[key] = w[key] * 0.99 + 1.0 * 0.01
+    # Normalize: weights average to 1.0, clamp to [0.1, 5.0]
+    total = sum(w.values())
+    n_keys = len(w)
+    if total > 0 and n_keys > 0:
+        for key in w:
+            w[key] = max(WEIGHT_MIN, min(WEIGHT_MAX, w[key] * n_keys / total))
     state['strategy_weights'] = w
 
 
@@ -629,11 +692,14 @@ def explore(question):
     # Generate
     print(f"\n  Generating perspectives ({cfg.get('provider')}/{cfg.get('model')})...", flush=True)
     strategies = _select_strategies(state, cfg)
+    w = state.get('strategy_weights', {})
+    _verbose(f"strategies: {[f'{s}({w.get(s, 1.0):.2f})' for s in strategies]}")
     responses = _generate_perspectives(question, strategies, cfg)
     responses = {k: v for k, v in responses.items() if v}
 
     if 'default' not in responses:
-        print("  Default response failed. Check your LLM configuration.")
+        print(f"  Default response failed ({cfg.get('provider')}/{cfg.get('model')}).")
+        print(f"  Run 'prism config' to verify settings.")
         return
 
     non_default = {k: v for k, v in responses.items() if k != 'default'}
@@ -680,12 +746,15 @@ def explore(question):
     session_type = _classify_session(conf_before, conf_after, shift, direction,
                                       human_after, question)
 
+    if (human_before and len(human_before) > INPUT_TRUNCATION_LIMIT) or (human_after and len(human_after) > INPUT_TRUNCATION_LIMIT):
+        print("  (Note: response truncated to 500 characters for storage)")
+
     session = {
         'id': hashlib.sha256(str(time.time()).encode()).hexdigest()[:8],
         'timestamp': datetime.now().isoformat(),
         'question': question,
-        'human_before': human_before[:500] if human_before else None,
-        'human_after': human_after[:500] if human_after else None,
+        'human_before': human_before[:INPUT_TRUNCATION_LIMIT] if human_before else None,
+        'human_after': human_after[:INPUT_TRUNCATION_LIMIT] if human_after else None,
         'confidence_before': conf_before,
         'confidence_after': conf_after,
         'strategies_shown': shown_keys,
@@ -766,29 +835,24 @@ def check(conclusion):
     print(f"  {'=' * 56}\n")
 
     print(f"  Generating challenges ({cfg.get('provider')}/{cfg.get('model')})...", flush=True)
-    provider = cfg.get('provider', 'ollama')
     results = {}
-
-    if provider in ('openai', 'anthropic', 'gemini', 'openrouter', 'custom'):
-        lock = threading.Lock()
-        def _gen(key):
-            s = STRATEGIES[key]
-            resp = _llm_call(s['system'], s.get('prefix', '') + conclusion, cfg)
-            with lock:
-                results[key] = resp
-        threads = [threading.Thread(target=_gen, args=(k,), daemon=True)
-                   for k in CHECK_STRATEGIES]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=120)
-    else:
-        for key in CHECK_STRATEGIES:
-            s = STRATEGIES[key]
-            print(f"  {s['name']}...", end="", flush=True)
-            resp = _llm_call(s['system'], s.get('prefix', '') + conclusion, cfg)
+    lock = threading.Lock()
+    completed = [0]
+    total = len(CHECK_STRATEGIES)
+    def _gen(key):
+        s = STRATEGIES[key]
+        resp = _llm_call(s['system'], s.get('prefix', '') + conclusion, cfg)
+        with lock:
             results[key] = resp
-            print(f" done" if resp else " failed")
+            completed[0] += 1
+            print(f"\r  Generating... [{completed[0]}/{total}]", end="", flush=True)
+    threads = [threading.Thread(target=_gen, args=(k,), daemon=True)
+               for k in CHECK_STRATEGIES]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=120)
+    print()
 
     for key in CHECK_STRATEGIES:
         if key in results and results[key]:
@@ -811,7 +875,7 @@ def quick(question):
     responses = _generate_perspectives(question, strategies, cfg)
     responses = {k: v for k, v in responses.items() if v}
     if 'default' not in responses:
-        print("  Failed. Check LLM configuration.")
+        print(f"  Failed ({cfg.get('provider')}/{cfg.get('model')}). Run 'prism config' to verify.")
         return
     divergences = {k: _distance(responses['default'], v)
                    for k, v in responses.items() if k != 'default'}
@@ -873,7 +937,7 @@ def insights():
             print("    Caution: confidence rising after perspectives")
 
     # Strategy effectiveness by deep shift rate
-    if len(sessions) >= 5:
+    if len(sessions) >= 3:
         strat_types = {}
         for s in sessions:
             st = s.get('session_type', '')
@@ -898,7 +962,7 @@ def insights():
 
     # Convergence
     conv = [s['convergence_score'] for s in sessions if s.get('convergence_score') is not None]
-    if len(conv) >= 10:
+    if len(conv) >= 5:
         recent = conv[-20:]
         nr = len(recent)
         xm = (nr - 1) / 2
@@ -906,7 +970,8 @@ def insights():
         num = sum((i - xm) * (s - ym) for i, s in enumerate(recent))
         den = sum((i - xm) ** 2 for i in range(nr))
         slope = num / den if den > 0 else 0
-        print(f"\n  Convergence (last {nr} sessions):")
+        caveat = "  (low sample size)" if nr < 10 else ""
+        print(f"\n  Convergence (last {nr} sessions):{caveat}")
         if slope < -0.01:
             print(f"    CONVERGING (slope: {slope:.4f}) — moving toward AI defaults")
         elif slope > 0.01:
@@ -917,14 +982,14 @@ def insights():
     print()
 
 
-def history():
+def history(count=10):
     state = _load_state()
     sessions = state.get('sessions', [])
     print(f"\n  PRISM — History ({len(sessions)} sessions)\n  {'─' * 56}")
     if not sessions:
         print('  No sessions yet.\n')
         return
-    for s in sessions[-10:]:
+    for s in sessions[-count:]:
         cb, ca = s.get('confidence_before'), s.get('confidence_after')
         if cb is not None and ca is not None:
             conf = f"{cb}→{ca}"
@@ -973,6 +1038,26 @@ def config_cmd(args):
         if val != 'auto':
             val = [s.strip() for s in val.split(',')]
 
+    # Validate
+    _VALID_PROVIDERS = ('ollama', 'openai', 'anthropic', 'gemini', 'openrouter', 'custom')
+    _VALIDATORS = {
+        'temperature': lambda v: isinstance(v, (int, float)) and 0.0 <= v <= 2.0,
+        'max_tokens': lambda v: isinstance(v, int) and 50 <= v <= 4096,
+        'num_perspectives': lambda v: isinstance(v, int) and 1 <= v <= 10,
+        'num_shown': lambda v: isinstance(v, int) and 1 <= v <= 10,
+        'provider': lambda v: v in _VALID_PROVIDERS,
+    }
+    _RANGES = {
+        'temperature': '0.0-2.0',
+        'max_tokens': '50-4096',
+        'num_perspectives': '1-10',
+        'num_shown': '1-10',
+        'provider': ', '.join(_VALID_PROVIDERS),
+    }
+    if key in _VALIDATORS and not _VALIDATORS[key](val):
+        print(f"  Invalid value for {key}. Valid: {_RANGES[key]}")
+        return
+
     # Ask user: global or project-level?
     target = 'global'
     if sys.stdin.isatty():
@@ -989,7 +1074,7 @@ def config_cmd(args):
         if proj_file.exists():
             try:
                 proj = json.loads(proj_file.read_text())
-            except:
+            except (json.JSONDecodeError, OSError):
                 pass
         proj[key] = val
         proj_file.write_text(json.dumps(proj, indent=2))
@@ -1039,7 +1124,7 @@ def _print_wrapped(text, indent=4, width=76):
 # PROGRAMMATIC API
 # ============================================================
 
-def get_perspectives(question, n=None):
+def get_perspectives(question: str, n: int | None = None) -> dict:
     state = _load_state()
     cfg = _load_config()
     strategies = _select_strategies(state, cfg)
@@ -1062,32 +1147,25 @@ def get_perspectives(question, n=None):
     return result
 
 
-def get_check(conclusion):
+def get_check(conclusion: str) -> dict:
     """Challenge a conclusion. Returns structured JSON for integrations."""
     cfg = _load_config()
     provider = cfg.get('provider', 'ollama')
     results = {}
 
-    if provider in ('openai', 'anthropic', 'gemini', 'openrouter', 'custom'):
-        lock = threading.Lock()
-        def _gen(key):
-            s = STRATEGIES[key]
-            resp = _llm_call(s['system'], s.get('prefix', '') + conclusion, cfg)
-            with lock:
-                if resp:
-                    results[key] = resp
-        threads = [threading.Thread(target=_gen, args=(k,), daemon=True)
-                   for k in CHECK_STRATEGIES]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=120)
-    else:
-        for key in CHECK_STRATEGIES:
-            s = STRATEGIES[key]
-            resp = _llm_call(s['system'], s.get('prefix', '') + conclusion, cfg)
+    lock = threading.Lock()
+    def _gen(key):
+        s = STRATEGIES[key]
+        resp = _llm_call(s['system'], s.get('prefix', '') + conclusion, cfg)
+        with lock:
             if resp:
                 results[key] = resp
+    threads = [threading.Thread(target=_gen, args=(k,), daemon=True)
+               for k in CHECK_STRATEGIES]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=120)
 
     output = {'conclusion': conclusion, 'challenges': []}
     for key in CHECK_STRATEGIES:
@@ -1104,6 +1182,18 @@ def get_check(conclusion):
 # INTEGRATION SETUP
 # ============================================================
 
+_DETECT = {
+    'claude': Path.home() / '.claude',
+    'cursor': Path.home() / '.cursor',
+    'codex': Path.home() / '.codex',
+    'windsurf': Path.home() / '.windsurf',
+    'kiro': Path.home() / '.kiro',
+    'gemini': Path.home() / '.gemini',
+    'augment': Path.home() / '.augment',
+    'copilot': Path.home() / '.config' / 'github-copilot',
+}
+
+
 def setup(platform):
     """Set up integration with AI coding tools."""
     prism_path = os.path.realpath(__file__)
@@ -1112,12 +1202,13 @@ def setup(platform):
         'install': lambda: _setup_install(prism_path),
         'claude': _setup_claude_code,
         'claude-code': _setup_claude_code,
-        'codex': _setup_codex,
-        'cursor': _setup_cursor,
-        'copilot': _setup_copilot,
-        'windsurf': _setup_windsurf,
-        'kiro': _setup_kiro,
-        'augment': _setup_augment,
+        'codex': lambda: _setup_tool('codex'),
+        'cursor': lambda: _setup_tool('cursor'),
+        'copilot': lambda: _setup_tool('copilot'),
+        'windsurf': lambda: _setup_tool('windsurf'),
+        'kiro': lambda: _setup_tool('kiro'),
+        'gemini': lambda: _setup_tool('gemini'),
+        'augment': lambda: _setup_tool('augment'),
     }
 
     if platform in platforms:
@@ -1127,18 +1218,49 @@ def setup(platform):
             if name not in ('install', 'claude-code'):
                 fn()
         print(f"\n  All integrations installed.\n")
-    else:
+    elif not platform:
+        # Auto-detect installed tools (interactive only)
+        if not sys.stdin.isatty():
+            _setup_help()
+            return
+        detected = [n for n, p in _DETECT.items() if p.exists()]
+        if not detected:
+            _setup_help()
+            return
         print(f"\n  PRISM — Setup")
-        print(f"  {'─' * 40}")
-        print(f"  prism setup install    # make 'prism' available globally")
-        print(f"  prism setup claude     # Claude Code (/prism, /prism-check)")
-        print(f"  prism setup codex      # Codex CLI")
-        print(f"  prism setup cursor     # Cursor (in project dir)")
-        print(f"  prism setup copilot    # GitHub Copilot")
-        print(f"  prism setup windsurf   # Windsurf (in project dir)")
-        print(f"  prism setup kiro       # Kiro (in project dir)")
-        print(f"  prism setup augment    # Augment Code")
-        print(f"  prism setup all        # all of the above\n")
+        print(f"  {'─' * 30}")
+        print(f"  Detected tools:")
+        for name in detected:
+            print(f"    ✓ {name.title()}")
+        print()
+        try:
+            choice = input("  Set up all detected tools? (y/n): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            choice = 'n'
+        if choice in ('y', 'yes'):
+            for name in detected:
+                if name in platforms:
+                    platforms[name]()
+            print(f"\n  Done.\n")
+        else:
+            print(f"  Cancelled.\n")
+    else:
+        _setup_help()
+
+
+def _setup_help():
+    print(f"\n  PRISM — Setup")
+    print(f"  {'─' * 40}")
+    print(f"  prism setup install    # make 'prism' available globally")
+    print(f"  prism setup claude     # Claude Code (/prism, /prism-check)")
+    print(f"  prism setup codex      # Codex CLI")
+    print(f"  prism setup cursor     # Cursor")
+    print(f"  prism setup copilot    # GitHub Copilot")
+    print(f"  prism setup windsurf   # Windsurf")
+    print(f"  prism setup kiro       # Kiro")
+    print(f"  prism setup gemini     # Gemini CLI")
+    print(f"  prism setup augment    # Augment Code")
+    print(f"  prism setup all        # all of the above\n")
 
 
 def _setup_install(prism_path):
@@ -1268,10 +1390,11 @@ def _setup_claude_code():
         if old_file.exists():
             old_file.unlink()
 
-    print(f"\n  Claude Code plugin installed:")
+    print(f"\n  Claude Code plugin installed (self-contained — works with or without CLI):")
     print(f"    Cache: {cache_dir}")
     print(f"    /prism <question>          — divergent perspectives")
     print(f"    /prism-check <conclusion>  — challenge a conclusion")
+    print(f"    prism-auto                 — auto-triggers on decision questions")
     print(f"\n  Restart Claude Code to activate.")
 
 
@@ -1289,107 +1412,141 @@ def _ask_scope():
     return 'global' if choice == '2' else 'project'
 
 
-# Tool-specific paths: (global_path_fn, project_path_fn)
-_TOOL_PATHS = {
+def _generate_instruction_content():
+    """Self-contained Prism methodology for AI tool instruction files."""
+    return """\
+## Prism — Divergent Perspectives
+
+When the user asks for perspectives, different angles, challenges thinking, says "prism", or is making a decision/evaluating approaches:
+
+### CLI Fallback
+
+If `prism` CLI is available: run `prism json "question"` (or `prism json --check "conclusion"` for challenges). Parse and present the JSON output — it includes divergence scores and tracking.
+
+Otherwise, generate natively using the instructions below.
+
+### Perspectives Mode
+
+1. **Default answer** — most practical, specific answer (3-4 sentences). Concrete technologies/approaches, not vague principles.
+2. **3 perspectives** — pick 3 strategies from the table. Follow each constraint EXACTLY. No hedging — commit fully.
+3. **Rank** by how different each is from the default. Most divergent first.
+4. **Present:**
+
+**Default Answer**
+[3-4 sentences]
+
+---
+**Divergent Perspectives**
+
+**1. [Strategy]** — [full perspective, 4-8 sentences]
+**2. [Strategy]** — [full perspective]
+**3. [Strategy]** — [full perspective]
+
+*Do any of these shift how you're thinking about this?*
+
+### Check Mode (challenge a conclusion)
+
+Apply all 4: Pre-Mortem, Alt Hypothesis, Falsification, Blind Spot (see table for constraints). Present each as a bold heading + 4-8 sentence challenge. End with: *"Does the original conclusion still hold?"*
+
+### Strategies
+
+| Strategy | Constraint |
+|----------|-----------|
+| Devil's Advocate | Argue AGAINST the common position. No hedging. Real failure examples. |
+| Pre-Mortem | 18 months from now, this failed. Write the post-mortem. Specific failure modes. |
+| Falsification | Design the exact test that would disprove this. Metric, threshold, timeframe. |
+| Blind Spot | ONE hidden assumption that changes the entire framing. The mechanism that hides it. |
+| Alt Hypothesis | 3 structurally different explanations. Core insight, scenario where it wins, distinguishing test. |
+| First Principles | List 2-3 "everyone knows" assumptions. Show where each breaks. Rebuild without them. |
+| Inversion | Answer the exact opposite question in detail. What does the inversion reveal? |
+| Systems | Only 2nd/3rd order effects. Follow causal chains 3 steps. Name feedback loops. |
+| Stakeholder | Who gets harmed? Tell the story from their perspective. Make the friction concrete. |
+| Adjacent Field | Pick a specific field that solved an analogous problem. Map their technique onto this. |
+
+**Important:** Do NOT paraphrase or compress. The value is in specifics. Each perspective: 4-8 sentences minimum.
+"""
+
+
+_TOOL_CONFIGS = {
     'codex': {
-        'global': lambda: Path.home() / '.codex' / 'instructions.md',
-        'project': lambda: Path.cwd() / '.codex' / 'instructions.md',
+        'format': 'append',
+        'paths': {'project': lambda: Path.cwd() / 'AGENTS.md'},
     },
     'cursor': {
-        'global': lambda: Path.home() / '.cursor' / 'rules' / 'prism.mdc',
-        'project': lambda: Path.cwd() / '.cursor' / 'rules' / 'prism.mdc',
+        'format': 'standalone',
+        'frontmatter': ('---\n'
+                        'description: Generate divergent perspectives when evaluating decisions or approaches\n'
+                        'globs:\n'
+                        'alwaysApply: false\n'
+                        '---\n\n'),
+        'paths': {
+            'global': lambda: Path.home() / '.cursor' / 'rules' / 'prism.mdc',
+            'project': lambda: Path.cwd() / '.cursor' / 'rules' / 'prism.mdc',
+        },
     },
     'copilot': {
-        'global': lambda: Path.home() / '.github' / 'copilot-instructions.md',
-        'project': lambda: Path.cwd() / '.github' / 'copilot-instructions.md',
+        'format': 'append',
+        'paths': {'project': lambda: Path.cwd() / '.github' / 'copilot-instructions.md'},
     },
     'windsurf': {
-        'global': lambda: Path.home() / '.windsurfrules',
-        'project': lambda: Path.cwd() / '.windsurfrules',
+        'format': 'standalone',
+        'frontmatter': '---\ntrigger: model_decision\n---\n\n',
+        'paths': {
+            'global': lambda: Path.home() / '.windsurf' / 'rules' / 'prism.md',
+            'project': lambda: Path.cwd() / '.windsurf' / 'rules' / 'prism.md',
+        },
     },
     'kiro': {
-        'global': lambda: Path.home() / '.kiro' / 'instructions.md',
-        'project': lambda: Path.cwd() / '.kiro' / 'instructions.md',
+        'format': 'standalone',
+        'frontmatter': '---\ninclusion: auto\n---\n\n',
+        'paths': {
+            'global': lambda: Path.home() / '.kiro' / 'steering' / 'prism.md',
+            'project': lambda: Path.cwd() / '.kiro' / 'steering' / 'prism.md',
+        },
+    },
+    'gemini': {
+        'format': 'append',
+        'paths': {'project': lambda: Path.cwd() / 'GEMINI.md'},
     },
     'augment': {
-        'global': lambda: Path.home() / '.augment' / 'instructions.md',
-        'project': lambda: Path.cwd() / '.augment' / 'instructions.md',
+        'format': 'standalone',
+        'frontmatter': '',
+        'paths': {'global': lambda: Path.home() / '.augment' / 'rules' / 'prism.md'},
     },
 }
 
 
 def _setup_tool(name):
-    """Set up Prism for a specific AI tool with user-chosen scope."""
-    scope = _ask_scope()
-    f = _TOOL_PATHS[name][scope]()
+    """Set up Prism for a specific AI tool."""
+    cfg = _TOOL_CONFIGS[name]
+    paths = cfg['paths']
+
+    if len(paths) > 1:
+        scope = _ask_scope()
+    else:
+        scope = next(iter(paths))
+
+    f = paths[scope]()
     f.parent.mkdir(parents=True, exist_ok=True)
+    content = _generate_instruction_content()
 
-    block = _integration_block()
-
-    if name == 'cursor':
-        # Cursor needs frontmatter in .mdc format
-        content = """---
-description: Challenge conclusions and get diverse perspectives using Prism
-globs:
-alwaysApply: false
----
-""" + block
+    if cfg['format'] == 'standalone':
+        full = cfg.get('frontmatter', '') + content
         if f.exists() and 'Prism' in f.read_text():
-            print(f"  {name.title()}: Prism already configured in {f}")
+            print(f"  {name.title()}: already configured in {f}")
             return
-        f.write_text(content)
+        f.write_text(full)
         print(f"  {name.title()}: created {f}  ({scope})")
     else:
-        _append_to_file(f, block, name.title(), scope)
-
-
-def _setup_codex():
-    _setup_tool('codex')
-
-def _setup_cursor():
-    _setup_tool('cursor')
-
-def _setup_copilot():
-    _setup_tool('copilot')
-
-def _setup_windsurf():
-    _setup_tool('windsurf')
-
-def _setup_kiro():
-    _setup_tool('kiro')
-
-def _setup_augment():
-    _setup_tool('augment')
-
-
-def _integration_block():
-    """Shared instruction block for all non-Claude tools."""
-    return """
-## Prism — Divergent Perspectives
-
-When the user asks for perspectives, different angles, or wants to challenge a conclusion:
-
-**Perspectives:** `prism json "the question"`
-**Challenge a conclusion:** `prism json --check "the conclusion"`
-
-Run the command, parse the JSON output. For perspectives, show each strategy name,
-divergence score, and the key insight. For challenges, show each strategy's core point.
-Then ask if their thinking has changed.
-"""
-
-
-def _append_to_file(f, block, name, scope=''):
-    """Append a block to a file if Prism isn't already present."""
-    if f.exists():
-        existing = f.read_text()
-        if 'Prism' in existing:
-            print(f"  {name}: Prism already configured in {f}")
-            return
-        f.write_text(existing.rstrip() + '\n' + block)
-    else:
-        f.write_text(block.strip() + '\n')
-    scope_label = f"  ({scope})" if scope else ''
-    print(f"  {name}: added Prism to {f}{scope_label}")
+        if f.exists():
+            existing = f.read_text()
+            if 'Prism' in existing:
+                print(f"  {name.title()}: already configured in {f}")
+                return
+            f.write_text(existing.rstrip() + '\n\n' + content)
+        else:
+            f.write_text(content)
+        print(f"  {name.title()}: added Prism to {f}  ({scope})")
 
 
 # ============================================================
@@ -1398,6 +1555,12 @@ def _append_to_file(f, block, name, scope=''):
 
 def _main():
     args = sys.argv
+    # Extract --verbose/-v flag
+    verbose = '--verbose' in args or '-v' in args
+    args = [a for a in args if a not in ('--verbose', '-v')]
+    if verbose:
+        os.environ['PRISM_VERBOSE'] = '1'
+
     cmd = args[1] if len(args) > 1 else ''
 
     if cmd == 'explore':
@@ -1423,7 +1586,7 @@ def _main():
     elif cmd == 'insights':
         insights()
     elif cmd == 'history':
-        history()
+        history(int(args[2]) if len(args) > 2 and args[2].isdigit() else 10)
     elif cmd == 'config':
         config_cmd(args[2:])
     elif cmd == 'reset':

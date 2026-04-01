@@ -6,7 +6,7 @@ argument-hint: <conclusion to challenge>
 
 # Prism Check — Challenge a Conclusion
 
-Generates 4 targeted challenges against a conclusion using research-backed strategies: Pre-Mortem, Alternative Hypothesis, Falsification, and Blind Spot. Use this after AI-assisted research, before committing to an approach.
+Stress-test a conclusion using 4 research-backed strategies before committing to it.
 
 ## When to use
 
@@ -17,43 +17,30 @@ Generates 4 targeted challenges against a conclusion using research-backed strat
 
 ## How to run
 
-Run this command with the conclusion to challenge:
+**Path 1 — CLI available:** Run `prism json --check "$ARGUMENTS"`, parse JSON, present results.
 
-```bash
-prism json --check "$ARGUMENTS"
-```
+**Path 2 — No CLI:** Generate all 4 challenges below natively.
 
-## How to present results
+### Generate 4 Challenges
 
-Parse the JSON output. It contains:
-- `conclusion` — what's being challenged
-- `challenges` — array of 4 challenges, each with:
-  - `strategy` — strategy key
-  - `name` — human-readable name
-  - `text` — the challenge content
+Apply ALL of these to the conclusion:
 
-**Present like this:**
+**Pre-Mortem** — It is 18 months from now. This approach was pursued and FAILED. The failure was predictable in hindsight. Write the post-mortem: the specific failure mode, the early warning signs that were rationalized away, the moment the team should have pivoted. Be brutally concrete — "the API rate limits hit at 10K users and there was no fallback" not "scalability was an issue."
+
+**Alt Hypothesis** — Name 3 genuinely different explanations or approaches. Not variations on a theme — structurally different mechanisms. For each: (a) the core insight that makes it work, (b) one scenario where it outperforms the conclusion, (c) the test that distinguishes them.
+
+**Falsification** — Design the exact test that would DISPROVE this. Name the specific metric, threshold, and scenario. "If X does not achieve Y under condition Z within timeframe W, this approach is wrong." If no test can disprove it, explain why that's a red flag.
+
+**Blind Spot** — Identify exactly ONE hidden assumption that changes the entire framing. Not a minor detail — a structural blind spot that, once seen, makes the conclusion look naive. Explain the mechanism that keeps people from seeing it.
+
+### Present
 
 For each challenge:
 1. **Strategy name** in bold
-2. The core challenge in 1-2 sentences
+2. The full challenge (4-8 sentences minimum — commit fully, no hedging)
 
 End with: *"Does the original conclusion still hold?"*
 
-## If prism command is not found
+## Important
 
-Tell the user:
-```bash
-git clone https://github.com/kirti34n/prism.git && cd prism
-pipx install .
-prism setup claude
-```
-
-## The 4 challenge strategies
-
-| Strategy | What it forces | Evidence |
-|----------|---------------|---------|
-| **Pre-Mortem** | "This failed. The failure was predictable. Why?" | Klein 2007 — 30% more failure reasons |
-| **Alt Hypothesis** | 3 structurally different explanations | Hirt & Markman 1995 — debiasing |
-| **Falsification** | What specific result would disprove this? | Tetlock 2015 — superforecaster habit |
-| **Blind Spot** | The one thing everyone misses | — |
+Do NOT soften or balance challenges. The entire point is to stress-test. Each challenge should make the user uncomfortable with the conclusion — that's the signal it's working.

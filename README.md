@@ -71,19 +71,26 @@ Zero dependencies. Python 3.7+ and an LLM. Nothing else needed.
 ### 3. Add to your AI tools
 
 ```bash
-prism setup claude     # Claude Code — /prism and /prism-check in autocomplete
-prism setup codex      # Codex CLI
+prism setup            # auto-detect installed tools, set up all at once
+```
+
+Or pick individually:
+
+```bash
+prism setup claude     # Claude Code — /prism, /prism-check, auto-trigger
 prism setup cursor     # Cursor
+prism setup codex      # Codex CLI
 prism setup copilot    # GitHub Copilot
 prism setup windsurf   # Windsurf
 prism setup kiro       # Kiro
+prism setup gemini     # Gemini CLI
 prism setup augment    # Augment Code
 prism setup all        # all of the above
 ```
 
-Each setup asks: **this project only, or all projects?** You choose the scope.
+Each setup generates a **self-contained instruction file** — the full Prism methodology baked into the AI tool's native config format. The AI applies it using its own model. **No CLI binary needed at runtime. No PATH, no API keys, no subprocess.**
 
-No server. No daemon. Setup creates the config files that teach each AI tool to call `prism`.
+If the CLI *is* installed, tools use it automatically (for measurement and history tracking). If not, everything still works — you just don't get the tracking.
 
 > [!NOTE]
 > After `prism setup claude`, **restart Claude Code** to see `/prism` in autocomplete.
@@ -100,8 +107,10 @@ No server. No daemon. Setup creates the config files that teach each AI tool to 
 /prism-check AI says we should use microservices because the team will grow
 ```
 
-**Codex / Copilot / Cursor / Windsurf / Kiro / Augment:**
-Ask your AI: *"challenge this conclusion using prism"* or *"get prism perspectives on X"* — the setup instructions teach the AI to run the command.
+Claude Code also auto-triggers lightweight Prism perspectives when you're making decisions ("should we...", "which approach...", "is it better to...").
+
+**Cursor / Codex / Copilot / Windsurf / Kiro / Gemini CLI / Augment:**
+The generated instruction file teaches the AI the full methodology. Ask naturally: *"challenge this conclusion"* or *"get different perspectives on X"* — or the AI triggers it automatically when you're evaluating approaches.
 
 ### Standalone (terminal)
 
