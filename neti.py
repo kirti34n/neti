@@ -7,6 +7,7 @@ Research-backed structural constraints. Zero dependencies.
 
   neti "question"              # explore: position → perspectives → revised position
   neti check "AI conclusion"   # challenge an AI conclusion before committing
+  neti research "question"     # deep analysis: 5 perspectives, 800 tokens, forced strategies
   neti quick "question"        # just show perspectives, no measurement
   neti think                   # random prompt → explore
   neti insights                # your thinking patterns over time
@@ -732,9 +733,21 @@ def explore(question):
         human_before = None
     conf_before = _read_confidence() if human_before else None
 
+    # Research mode: deeper analysis
+    is_research = os.environ.pop('NETI_RESEARCH', None)
+    if is_research:
+        cfg = {**cfg, 'max_tokens': 800, 'num_perspectives': 5, 'num_shown': 5}
+
     # Generate
     print(f"\n  Generating perspectives ({cfg.get('provider')}/{cfg.get('model')})...", flush=True)
     strategies = _select_strategies(state, cfg)
+    if is_research:
+        must_have = ['falsification', 'adjacent_field', 'alternative_hypothesis']
+        missing = [s for s in must_have if s not in strategies and s in STRATEGY_KEYS]
+        replaceable = [s for s in strategies if s not in must_have]
+        for s in missing:
+            if replaceable:
+                strategies[strategies.index(replaceable.pop())] = s
     w = state.get('strategy_weights', {})
     _verbose(f"strategies: {[f'{s}({w.get(s, 1.0):.2f})' for s in strategies]}")
     responses = _generate_perspectives(question, strategies, cfg)
@@ -1786,6 +1799,13 @@ def _main():
             check(q)
         else:
             print('  Usage: neti check "AI conclusion to challenge"')
+    elif cmd == 'research':
+        q = ' '.join(args[2:]) if len(args) > 2 else None
+        if q:
+            os.environ['NETI_RESEARCH'] = '1'
+            explore(q)
+        else:
+            print('  Usage: neti research "question"')
     elif cmd == 'quick':
         q = ' '.join(args[2:]) if len(args) > 2 else None
         if q:
