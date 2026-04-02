@@ -518,7 +518,10 @@ def _generate_perspectives(question, strategies, config, quiet=False):
     def _gen(idx, key):
         with sem:
             s = STRATEGIES[key]
-            resp = _llm_call(s['system'], s.get('prefix', '') + question, config)
+            contrastive = ''
+            if default_resp:
+                contrastive = f"The conventional AI answer is:\n{default_resp[:400]}\n\nNow challenge that specific answer.\n\n"
+            resp = _llm_call(s['system'], contrastive + s.get('prefix', '') + question, config)
             with lock:
                 results[key] = resp
                 completed[0] += 1
