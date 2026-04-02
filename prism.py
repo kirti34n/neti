@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-Neti — Think different. Not different answers. Different angles.
+Prism — Think different. Not different answers. Different angles.
 
 One question through multiple lenses. Measures how your thinking shifts.
 Research-backed structural constraints. Zero dependencies.
 
-  neti "question"              # explore: position → perspectives → revised position
-  neti check "AI conclusion"   # challenge an AI conclusion before committing
-  neti research "question"     # deep analysis: 5 perspectives, 800 tokens, forced strategies
-  neti quick "question"        # just show perspectives, no measurement
-  neti think                   # random prompt → explore
-  neti insights                # your thinking patterns over time
-  neti history                 # recent sessions
-  neti config [key] [val]      # show or set configuration
-  neti setup install           # make 'neti' a global command
-  neti setup claude            # Claude Code (/neti slash command)
-  neti setup gemini            # Gemini CLI
-  neti setup all               # all tool integrations
-  neti json "question"         # machine-readable output
-  neti json --check "concl"    # machine-readable check output
-  neti reset                   # fresh start
-  neti --version               # show version
+  prism "question"              # explore: position → perspectives → revised position
+  prism check "AI conclusion"   # challenge an AI conclusion before committing
+  prism research "question"     # deep analysis: 5 perspectives, 800 tokens, forced strategies
+  prism quick "question"        # just show perspectives, no measurement
+  prism think                   # random prompt → explore
+  prism insights                # your thinking patterns over time
+  prism history                 # recent sessions
+  prism config [key] [val]      # show or set configuration
+  prism setup install           # make 'prism' a global command
+  prism setup claude            # Claude Code (/prism slash command)
+  prism setup gemini            # Gemini CLI
+  prism setup all               # all tool integrations
+  prism json "question"         # machine-readable output
+  prism json --check "concl"    # machine-readable check output
+  prism reset                   # fresh start
+  prism --version               # show version
 
-Config:  .neti.json (project) → ~/.config/neti/config.json (global) → auto-detect
+Config:  .prism.json (project) → ~/.config/prism/config.json (global) → auto-detect
 """
 
 from __future__ import annotations
@@ -63,9 +63,9 @@ WEIGHT_MAX = 5.0
 # PATHS
 # ============================================================
 
-CONFIG_DIR = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'neti'
+CONFIG_DIR = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'prism'
 STATE_FILE = CONFIG_DIR / 'state.json'
-LOG_FILE = CONFIG_DIR / 'neti.log'
+LOG_FILE = CONFIG_DIR / 'prism.log'
 
 
 # ============================================================
@@ -75,7 +75,7 @@ LOG_FILE = CONFIG_DIR / 'neti.log'
 def _find_project_config():
     d = Path.cwd()
     while True:
-        f = d / '.neti.json'
+        f = d / '.prism.json'
         if f.exists():
             try:
                 return json.loads(f.read_text())
@@ -286,7 +286,7 @@ def _read_with_timeout(resp, timeout=60):
 
 
 def _verbose(msg):
-    if os.environ.get('NETI_VERBOSE'):
+    if os.environ.get('PRISM_VERBOSE'):
         print(f"  [verbose] {msg}", flush=True)
 
 
@@ -577,17 +577,6 @@ def _new_state():
 
 
 def _migrate_legacy_state():
-    # Migration from ~/.config/prism/ (old config dir)
-    old_config_dir = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'prism'
-    old_state = old_config_dir / 'state.json'
-    if old_state.exists() and not STATE_FILE.exists():
-        try:
-            data = json.loads(old_state.read_text())
-            if data.get('version') == VERSION:
-                _save_state(data)
-                return data
-        except (json.JSONDecodeError, OSError, KeyError, TypeError):
-            pass
     # Migration from local prism_state.json (very old format)
     legacy = Path(__file__).parent / 'prism_state.json'
     if legacy.exists() and not STATE_FILE.exists():
@@ -725,7 +714,7 @@ def explore(question):
     state = _load_state()
     cfg = _load_config()
 
-    print(f"\n  NETI")
+    print(f"\n  PRISM")
     print(f"  {'=' * 56}")
     print(f"  {question}")
     print(f"  {'=' * 56}\n")
@@ -743,7 +732,7 @@ def explore(question):
     conf_before = _read_confidence() if human_before else None
 
     # Research mode: deeper analysis
-    is_research = os.environ.pop('NETI_RESEARCH', None)
+    is_research = os.environ.pop('PRISM_RESEARCH', None)
     if is_research:
         cfg = {**cfg, 'max_tokens': 800, 'num_perspectives': 5, 'num_shown': 5}
 
@@ -764,7 +753,7 @@ def explore(question):
 
     if 'default' not in responses:
         print(f"  Default response failed ({cfg.get('provider')}/{cfg.get('model')}).")
-        print(f"  Run 'neti config' to verify settings.")
+        print(f"  Run 'prism config' to verify settings.")
         return
 
     non_default = {k: v for k, v in responses.items() if k != 'default'}
@@ -886,7 +875,7 @@ def explore(question):
     if n < 5:
         print(f"\n  Session logged ({n}/5 for first insights).\n")
     else:
-        print(f"\n  Session logged. Run 'neti insights' for patterns.\n")
+        print(f"\n  Session logged. Run 'prism insights' for patterns.\n")
     _log(f"explore: q='{question[:50]}' type={session_type} conf={conf_before}→{conf_after}")
 
 
@@ -894,7 +883,7 @@ def check(conclusion):
     """Challenge an AI conclusion before committing."""
     cfg = _load_config()
 
-    print(f"\n  NETI — Challenge")
+    print(f"\n  PRISM — Challenge")
     print(f"  {'=' * 56}")
     _print_wrapped(conclusion, indent=2)
     print(f"  {'=' * 56}\n")
@@ -949,13 +938,13 @@ def check(conclusion):
 def quick(question):
     state = _load_state()
     cfg = _load_config()
-    print(f"\n  NETI — Quick View\n  {question}\n")
+    print(f"\n  PRISM — Quick View\n  {question}\n")
     strategies = _select_strategies(state, cfg)
     print(f"  Generating ({cfg.get('provider')}/{cfg.get('model')})...", flush=True)
     responses = _generate_perspectives(question, strategies, cfg)
     responses = {k: v for k, v in responses.items() if v}
     if 'default' not in responses:
-        print(f"  Failed ({cfg.get('provider')}/{cfg.get('model')}). Run 'neti config' to verify.")
+        print(f"  Failed ({cfg.get('provider')}/{cfg.get('model')}). Run 'prism config' to verify.")
         return
     divergences = {k: _distance(responses['default'], v)
                    for k, v in responses.items() if k != 'default'}
@@ -988,10 +977,10 @@ def think():
 def insights():
     state = _load_state()
     sessions = state.get('sessions', [])
-    print(f"\n  NETI — Insights\n  {'─' * 40}\n  Sessions: {len(sessions)}")
+    print(f"\n  PRISM — Insights\n  {'─' * 40}\n  Sessions: {len(sessions)}")
 
     if len(sessions) < 3:
-        print(f'\n  Need at least 3 sessions.\n  Run: neti "your question"\n')
+        print(f'\n  Need at least 3 sessions.\n  Run: prism "your question"\n')
         return
 
     # Session type distribution
@@ -1012,7 +1001,7 @@ def insights():
         avg = sum(deltas) / len(deltas)
         print(f"\n  Confidence change: {avg:+.1f} average ({len(pairs)} measured)")
         if avg < -1:
-            print("    Neti is creating productive doubt")
+            print("    Prism is creating productive doubt")
         elif avg > 1:
             print("    Caution: confidence rising after perspectives")
 
@@ -1065,7 +1054,7 @@ def insights():
 def history(count=10):
     state = _load_state()
     sessions = state.get('sessions', [])
-    print(f"\n  NETI — History ({len(sessions)} sessions)\n  {'─' * 56}")
+    print(f"\n  PRISM — History ({len(sessions)} sessions)\n  {'─' * 56}")
     if not sessions:
         print('  No sessions yet.\n')
         return
@@ -1086,13 +1075,13 @@ def config_cmd(args):
     project_cfg = _find_project_config()
     merged = _load_config()
     if not args:
-        print(f"\n  NETI — Configuration\n  {'─' * 40}")
+        print(f"\n  PRISM — Configuration\n  {'─' * 40}")
         for k, v in merged.items():
             src = '(project)' if k in project_cfg else '(global)' if k in global_cfg else '(auto)'
             print(f"  {k:>20}: {v}  {src}")
-        print(f"\n  Set: neti config <key> <value>")
+        print(f"\n  Set: prism config <key> <value>")
         print(f"  Global: {CONFIG_DIR / 'config.json'}")
-        print(f"  Project: .neti.json\n")
+        print(f"  Project: .prism.json\n")
         w = _load_state().get('strategy_weights', {})
         mode = merged.get('strategies', 'auto')
         print(f"  Strategies ({mode} mode):")
@@ -1149,7 +1138,7 @@ def config_cmd(args):
             pass
 
     if target == 'project':
-        proj_file = Path.cwd() / '.neti.json'
+        proj_file = Path.cwd() / '.prism.json'
         proj = {}
         if proj_file.exists():
             try:
@@ -1276,10 +1265,10 @@ _DETECT = {
 
 def setup(platform):
     """Set up integration with AI coding tools."""
-    neti_path = os.path.realpath(__file__)
+    prism_path = os.path.realpath(__file__)
 
     platforms = {
-        'install': lambda: _setup_install(neti_path),
+        'install': lambda: _setup_install(prism_path),
         'claude': _setup_claude_code,
         'claude-code': _setup_claude_code,
         'codex': lambda: _setup_tool('codex'),
@@ -1307,7 +1296,7 @@ def setup(platform):
         if not detected:
             _setup_help()
             return
-        print(f"\n  NETI — Setup")
+        print(f"\n  PRISM — Setup")
         print(f"  {'─' * 30}")
         print(f"  Detected tools:")
         for name in detected:
@@ -1329,24 +1318,24 @@ def setup(platform):
 
 
 def _setup_help():
-    print(f"\n  NETI — Setup")
+    print(f"\n  PRISM — Setup")
     print(f"  {'─' * 40}")
-    print(f"  neti setup install    # make 'neti' available globally")
-    print(f"  neti setup claude     # Claude Code (/neti, /neti-check)")
-    print(f"  neti setup codex      # Codex CLI")
-    print(f"  neti setup cursor     # Cursor")
-    print(f"  neti setup copilot    # GitHub Copilot")
-    print(f"  neti setup windsurf   # Windsurf")
-    print(f"  neti setup kiro       # Kiro")
-    print(f"  neti setup gemini     # Gemini CLI")
-    print(f"  neti setup augment    # Augment Code")
-    print(f"  neti setup all        # all of the above\n")
+    print(f"  prism setup install    # make 'prism' available globally")
+    print(f"  prism setup claude     # Claude Code (/prism, /prism-check)")
+    print(f"  prism setup codex      # Codex CLI")
+    print(f"  prism setup cursor     # Cursor")
+    print(f"  prism setup copilot    # GitHub Copilot")
+    print(f"  prism setup windsurf   # Windsurf")
+    print(f"  prism setup kiro       # Kiro")
+    print(f"  prism setup gemini     # Gemini CLI")
+    print(f"  prism setup augment    # Augment Code")
+    print(f"  prism setup all        # all of the above\n")
 
 
-def _setup_install(neti_path):
-    """Make 'neti' available as a system command."""
+def _setup_install(prism_path):
+    """Make 'prism' available as a system command."""
     import shutil
-    existing = shutil.which('neti')
+    existing = shutil.which('prism')
     resolved = os.path.realpath(existing) if existing else ''
 
     # If already installed via pip/pipx, skip symlink
@@ -1356,22 +1345,22 @@ def _setup_install(neti_path):
 
     bin_dir = Path.home() / '.local' / 'bin'
     bin_dir.mkdir(parents=True, exist_ok=True)
-    link = bin_dir / 'neti'
+    link = bin_dir / 'prism'
 
     # Make executable
-    os.chmod(neti_path, os.stat(neti_path).st_mode | 0o755)
+    os.chmod(prism_path, os.stat(prism_path).st_mode | 0o755)
 
     # Create symlink
     if link.exists() or link.is_symlink():
         link.unlink()
-    link.symlink_to(neti_path)
+    link.symlink_to(prism_path)
 
     # Check PATH
     on_path = str(bin_dir) in os.environ.get('PATH', '').split(':')
 
-    print(f"\n  Installed: {link} -> {neti_path}")
+    print(f"\n  Installed: {link} -> {prism_path}")
     if on_path:
-        print(f"  'neti' is on PATH. Ready to use.")
+        print(f"  'prism' is on PATH. Ready to use.")
     else:
         print(f"\n  Add to ~/.bashrc or ~/.zshrc:")
         print(f'    export PATH="$PATH:{bin_dir}"')
@@ -1380,26 +1369,26 @@ def _setup_install(neti_path):
 
 # ---- Embedded Claude Code skill content (no external files needed) ----
 
-_SKILL_NETI = """\
+_SKILL_PRISM = """\
 ---
-name: neti
+name: prism
 description: Generate divergent perspectives on a question using research-backed cognitive strategies. Reveals how AI shapes your thinking.
 argument-hint: <question or topic>
 ---
 
-# Neti — Divergent Perspectives
+# Prism — Divergent Perspectives
 
 Generate structurally different perspectives using 10 research-backed cognitive strategies.
 
 ## When to use
 
-- User asks for perspectives, different angles, challenges thinking, says "neti"
+- User asks for perspectives, different angles, challenges thinking, says "prism"
 - User is making a decision or evaluating approaches
 - User wants to stress-test a technical approach
 
 ## How to run
 
-**Path 1 — CLI available:** Run `neti json "$ARGUMENTS"`, parse the JSON output. It includes divergence scores and tracking. Present using the format in Step 4.
+**Path 1 — CLI available:** Run `prism json "$ARGUMENTS"`, parse the JSON output. It includes divergence scores and tracking. Present using the format in Step 4.
 
 **Path 2 — No CLI:** Generate natively using the steps below.
 
@@ -1457,25 +1446,25 @@ Do NOT paraphrase, shorten, or editorialize perspectives. The value is in the sp
 
 _SKILL_CHECK = """\
 ---
-name: neti-check
+name: prism-check
 description: Challenge a conclusion before committing to it. Generates Pre-Mortem, Alt Hypothesis, Falsification, and Blind Spot challenges.
 argument-hint: <conclusion to challenge>
 ---
 
-# Neti Check — Challenge a Conclusion
+# Prism Check — Challenge a Conclusion
 
 Stress-test a conclusion using 4 research-backed strategies before committing to it.
 
 ## When to use
 
 - User wants to challenge or stress-test a conclusion
-- User says "check this", "challenge this", "is this right", "neti check"
+- User says "check this", "challenge this", "is this right", "prism check"
 - User is about to commit to a technical decision based on AI advice
 - User has a claim or assumption they want tested
 
 ## How to run
 
-**Path 1 — CLI available:** Run `neti json --check "$ARGUMENTS"`, parse JSON, present results.
+**Path 1 — CLI available:** Run `prism json --check "$ARGUMENTS"`, parse JSON, present results.
 
 **Path 2 — No CLI:** Generate all 4 challenges below natively.
 
@@ -1506,12 +1495,12 @@ Do NOT soften or balance challenges. The entire point is to stress-test. Each ch
 
 _SKILL_AUTO = """\
 ---
-name: neti-auto
+name: prism-auto
 description: Automatically add diverse perspectives when user is making decisions, evaluating approaches, or asking should-I questions
 user-invocable: false
 ---
 
-# Neti Auto — Lightweight Perspective Nudges
+# Prism Auto — Lightweight Perspective Nudges
 
 When you detect the user is making a decision or evaluating approaches, add 2 brief divergent perspectives inline.
 
@@ -1535,20 +1524,20 @@ After your normal response, add:
 
 ---
 
-**Neti perspectives:**
+**Prism perspectives:**
 - **[Strategy]:** [2-3 sentence perspective]
 - **[Strategy]:** [2-3 sentence perspective]
 
-*Run /neti for the full experience with more perspectives.*
+*Run /prism for the full experience with more perspectives.*
 
 ---
 
-Keep it lightweight. This is a nudge, not the full Neti flow.
+Keep it lightweight. This is a nudge, not the full Prism flow.
 """
 
 
 def _setup_claude_code():
-    """Generate and install Neti as a Claude Code plugin (works from any install method)."""
+    """Generate and install Prism as a Claude Code plugin (works from any install method)."""
     claude_dir = Path.home() / '.claude'
     claude_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1563,36 +1552,36 @@ def _setup_claude_code():
 
     if 'extraKnownMarketplaces' not in settings:
         settings['extraKnownMarketplaces'] = {}
-    settings['extraKnownMarketplaces']['neti-skill'] = {
-        'source': {'source': 'github', 'repo': 'kirti34n/neti'}
+    settings['extraKnownMarketplaces']['prism-skill'] = {
+        'source': {'source': 'github', 'repo': 'kirti34n/prism'}
     }
     if 'enabledPlugins' not in settings:
         settings['enabledPlugins'] = {}
-    settings['enabledPlugins']['neti@neti-skill'] = True
+    settings['enabledPlugins']['prism@prism-skill'] = True
     settings_path.write_text(json.dumps(settings, indent=2) + '\n')
 
     # --- 2. Generate plugin files in cache ---
-    cache_dir = claude_dir / 'plugins' / 'cache' / 'neti-skill' / 'neti' / __version__
+    cache_dir = claude_dir / 'plugins' / 'cache' / 'prism-skill' / 'prism' / __version__
     files = {
         '.claude-plugin/plugin.json': json.dumps({
-            'name': 'neti', 'version': __version__,
+            'name': 'prism', 'version': __version__,
             'description': 'See how AI changes your thinking. Generate divergent '
                            'perspectives or challenge conclusions before committing.',
             'author': {'name': 'keerti'},
-            'skills': ['./.claude/skills/neti', './.claude/skills/neti-check',
-                       './.claude/skills/neti-auto'],
+            'skills': ['./.claude/skills/prism', './.claude/skills/prism-check',
+                       './.claude/skills/prism-auto'],
         }, indent=2),
         '.claude-plugin/marketplace.json': json.dumps({
-            'name': 'neti-skill', 'id': 'neti-skill',
+            'name': 'prism-skill', 'id': 'prism-skill',
             'owner': {'name': 'keerti'},
-            'plugins': [{'name': 'neti', 'source': './', 'version': __version__,
+            'plugins': [{'name': 'prism', 'source': './', 'version': __version__,
                          'description': 'Divergent perspectives and conclusion challenges '
                                         'using research-backed cognitive strategies.',
                          'category': 'thinking'}],
         }, indent=2),
-        '.claude/skills/neti/SKILL.md': _SKILL_NETI,
-        '.claude/skills/neti-check/SKILL.md': _SKILL_CHECK,
-        '.claude/skills/neti-auto/SKILL.md': _SKILL_AUTO,
+        '.claude/skills/prism/SKILL.md': _SKILL_PRISM,
+        '.claude/skills/prism-check/SKILL.md': _SKILL_CHECK,
+        '.claude/skills/prism-auto/SKILL.md': _SKILL_AUTO,
     }
     for rel_path, content in files.items():
         full = cache_dir / rel_path
@@ -1611,7 +1600,7 @@ def _setup_claude_code():
             pass
 
     now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
-    installed.setdefault('plugins', {})['neti@neti-skill'] = [{
+    installed.setdefault('plugins', {})['prism@prism-skill'] = [{
         'scope': 'user', 'installPath': str(cache_dir),
         'version': __version__, 'installedAt': now, 'lastUpdated': now,
     }]
@@ -1619,15 +1608,15 @@ def _setup_claude_code():
 
     # --- 4. Clean up old command files ---
     cmd_dir = claude_dir / 'commands'
-    for old in ('neti.md', 'neti-check.md'):
+    for old in ('prism.md', 'prism-check.md'):
         old_file = cmd_dir / old
         if old_file.exists():
             old_file.unlink()
 
     print(f"\n  Claude Code plugin installed (works with or without CLI):")
-    print(f"    /neti <question>          — divergent perspectives")
-    print(f"    /neti-check <conclusion>  — challenge a conclusion")
-    print(f"    neti-auto                 — auto-triggers on decision questions")
+    print(f"    /prism <question>          — divergent perspectives")
+    print(f"    /prism-check <conclusion>  — challenge a conclusion")
+    print(f"    prism-auto                 — auto-triggers on decision questions")
     print(f"\n  Restart Claude Code to activate.")
 
 
@@ -1635,7 +1624,7 @@ def _ask_scope():
     """Ask user to choose global or project scope."""
     if not sys.stdin.isatty():
         return 'project'
-    print(f"\n  Where should Neti be available?")
+    print(f"\n  Where should Prism be available?")
     print(f"    1. This project only")
     print(f"    2. All projects (global)")
     try:
@@ -1646,15 +1635,15 @@ def _ask_scope():
 
 
 def _generate_instruction_content():
-    """Self-contained Neti methodology for AI tool instruction files."""
+    """Self-contained Prism methodology for AI tool instruction files."""
     return """\
-## Neti — Divergent Perspectives
+## Prism — Divergent Perspectives
 
-When the user asks for perspectives, different angles, challenges thinking, says "neti", or is making a decision/evaluating approaches:
+When the user asks for perspectives, different angles, challenges thinking, says "prism", or is making a decision/evaluating approaches:
 
 ### CLI Fallback
 
-If `neti` CLI is available: run `neti json "question"` (or `neti json --check "conclusion"` for challenges). Parse and present the JSON output — it includes divergence scores and tracking.
+If `prism` CLI is available: run `prism json "question"` (or `prism json --check "conclusion"` for challenges). Parse and present the JSON output — it includes divergence scores and tracking.
 
 Otherwise, generate natively using the instructions below.
 
@@ -1713,8 +1702,8 @@ _TOOL_CONFIGS = {
                         'alwaysApply: false\n'
                         '---\n\n'),
         'paths': {
-            'global': lambda: Path.home() / '.cursor' / 'rules' / 'neti.mdc',
-            'project': lambda: Path.cwd() / '.cursor' / 'rules' / 'neti.mdc',
+            'global': lambda: Path.home() / '.cursor' / 'rules' / 'prism.mdc',
+            'project': lambda: Path.cwd() / '.cursor' / 'rules' / 'prism.mdc',
         },
     },
     'copilot': {
@@ -1725,16 +1714,16 @@ _TOOL_CONFIGS = {
         'format': 'standalone',
         'frontmatter': '---\ntrigger: model_decision\n---\n\n',
         'paths': {
-            'global': lambda: Path.home() / '.windsurf' / 'rules' / 'neti.md',
-            'project': lambda: Path.cwd() / '.windsurf' / 'rules' / 'neti.md',
+            'global': lambda: Path.home() / '.windsurf' / 'rules' / 'prism.md',
+            'project': lambda: Path.cwd() / '.windsurf' / 'rules' / 'prism.md',
         },
     },
     'kiro': {
         'format': 'standalone',
         'frontmatter': '---\ninclusion: auto\n---\n\n',
         'paths': {
-            'global': lambda: Path.home() / '.kiro' / 'steering' / 'neti.md',
-            'project': lambda: Path.cwd() / '.kiro' / 'steering' / 'neti.md',
+            'global': lambda: Path.home() / '.kiro' / 'steering' / 'prism.md',
+            'project': lambda: Path.cwd() / '.kiro' / 'steering' / 'prism.md',
         },
     },
     'gemini': {
@@ -1744,13 +1733,13 @@ _TOOL_CONFIGS = {
     'augment': {
         'format': 'standalone',
         'frontmatter': '',
-        'paths': {'global': lambda: Path.home() / '.augment' / 'rules' / 'neti.md'},
+        'paths': {'global': lambda: Path.home() / '.augment' / 'rules' / 'prism.md'},
     },
 }
 
 
 def _setup_tool(name):
-    """Set up Neti for a specific AI tool."""
+    """Set up Prism for a specific AI tool."""
     cfg = _TOOL_CONFIGS[name]
     paths = cfg['paths']
 
@@ -1765,7 +1754,7 @@ def _setup_tool(name):
 
     if cfg['format'] == 'standalone':
         full = cfg.get('frontmatter', '') + content
-        if f.exists() and 'Neti' in f.read_text():
+        if f.exists() and 'Prism' in f.read_text():
             print(f"  {name.title()}: already configured in {f}")
             return
         f.write_text(full)
@@ -1773,13 +1762,13 @@ def _setup_tool(name):
     else:
         if f.exists():
             existing = f.read_text()
-            if 'Neti' in existing:
+            if 'Prism' in existing:
                 print(f"  {name.title()}: already configured in {f}")
                 return
             f.write_text(existing.rstrip() + '\n\n' + content)
         else:
             f.write_text(content)
-        print(f"  {name.title()}: added Neti to {f}  ({scope})")
+        print(f"  {name.title()}: added Prism to {f}  ({scope})")
 
 
 # ============================================================
@@ -1792,7 +1781,7 @@ def _main():
     verbose = '--verbose' in args or '-v' in args
     args = [a for a in args if a not in ('--verbose', '-v')]
     if verbose:
-        os.environ['NETI_VERBOSE'] = '1'
+        os.environ['PRISM_VERBOSE'] = '1'
 
     cmd = args[1] if len(args) > 1 else ''
 
@@ -1801,26 +1790,26 @@ def _main():
         if q:
             explore(q)
         else:
-            print('  Usage: neti explore "question"')
+            print('  Usage: prism explore "question"')
     elif cmd == 'check':
         q = ' '.join(args[2:]) if len(args) > 2 else None
         if q:
             check(q)
         else:
-            print('  Usage: neti check "AI conclusion to challenge"')
+            print('  Usage: prism check "AI conclusion to challenge"')
     elif cmd == 'research':
         q = ' '.join(args[2:]) if len(args) > 2 else None
         if q:
-            os.environ['NETI_RESEARCH'] = '1'
+            os.environ['PRISM_RESEARCH'] = '1'
             explore(q)
         else:
-            print('  Usage: neti research "question"')
+            print('  Usage: prism research "question"')
     elif cmd == 'quick':
         q = ' '.join(args[2:]) if len(args) > 2 else None
         if q:
             quick(q)
         else:
-            print('  Usage: neti quick "question"')
+            print('  Usage: prism quick "question"')
     elif cmd == 'think':
         think()
     elif cmd == 'insights':
@@ -1843,7 +1832,7 @@ def _main():
         else:
             print(json.dumps({'error': 'No input provided'}))
     elif cmd in ('--version', '-V', 'version'):
-        print(f"neti {__version__}")
+        print(f"prism {__version__}")
     elif cmd in ('--help', '-h', 'help'):
         print(__doc__)
     elif cmd:
