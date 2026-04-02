@@ -496,6 +496,15 @@ def _select_strategies(state, config):
         valid = [k for k in strategies_cfg if k in STRATEGIES and k != 'default']
         if valid:
             return valid[:n]
+    # Active convergence response: high adoption rate → full random
+    sessions = state.get('sessions', [])
+    recent = sessions[-10:] if len(sessions) >= 10 else sessions
+    if recent:
+        adoption_rate = sum(1 for s in recent if s.get('session_type') == 'adoption') / len(recent)
+        if adoption_rate > 0.5:
+            print("  [!] High adoption rate detected — diversifying perspectives")
+            return random.sample(STRATEGY_KEYS, min(n, len(STRATEGY_KEYS)))
+
     weights = state.get('strategy_weights', {})
     scored = [(k, weights.get(k, 1.0)) for k in STRATEGY_KEYS]
     # Cold start: when all weights are equal, fully randomize
